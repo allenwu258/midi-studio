@@ -1,9 +1,5 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -30,7 +26,6 @@ function createWindow(): void {
 
   if (isDev) {
     void mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL!);
-    mainWindow.webContents.openDevTools({ mode: "detach" });
   } else {
     void mainWindow.loadFile(path.join(__dirname, "../renderer/index.html"));
   }

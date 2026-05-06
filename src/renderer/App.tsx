@@ -1,22 +1,233 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { parseMidiFile, type NoteCluster, type ParsedSong } from "./lib/midi";
+import { formatTime } from "./lib/notation";
+import { SynthPlayer, type PlayerSnapshot } from "./lib/synthPlayer";
+
 export function App() {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const playerRef = useRef(new SynthPlayer());
+  const [song, setSong] = useState<ParsedSong | null>(null);
+  const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
+  const [speed, setSpeed] = useState(100);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    const unsubscribe = playerRef.current.subscribe(setSnapshot);
+    let frame = 0;
+
+    const update = () => {
+      setSnapshot(playerRef.current.getSnapshot());
+      frame = window.requestAnimationFrame(update);
+    };
+
+    frame = window.requestAnimationFrame(update);
+    return () => {
+      unsubscribe();
+      window.cancelAnimationFrame(frame);
+    };
+  }, []);
+
+  const activeCluster = useMemo(() => {
+    if (!song) {
+      return null;
+    }
+
+    return (
+      song.clusters.find(
+        (cluster) =>
+          snapshot.positionMs >= cluster.startMs &&
+          snapshot.positionMs <= Math.max(cluster.endMs, cluster.startMs + 180)
+      ) ?? null
+    );
+  }, [snapshot.positionMs, song]);
+
+  const activeClusterId = activeCluster?.id ?? "";
+  const progressPercent = song?.durationMs
+    ? Math.min(100, (snapshot.positionMs / song.durationMs) * 100)
+    : 0;
+
+  async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      setError("");
+      const buffer = await file.arrayBuffer();
+      const parsedSong = parseMidiFile(buffer, file.name);
+      playerRef.current.load(parsedSong.notes, parsedSong.durationMs);
+      setSong(parsedSong);
+      setSpeed(100);
+    } catch (err) {
+      setSong(null);
+      playerRef.current.stop();
+      setError(err instanceof Error ? err.message : "MIDI 解析失败。");
+    } finally {
+      event.currentTarget.value = "";
+    }
+  }
+
+  async function togglePlay() {
+    if (!song) {
+      fileInputRef.current?.click();
+      return;
+    }
+
+    if (snapshot.status === "playing") {
+      playerRef.current.pause();
+      return;
+    }
+
+    await playerRef.current.play();
+  }
+
+  function stopPlayback() {
+    playerRef.current.stop();
+  }
+
+  function seekTo(value: number) {
+    playerRef.current.seek(value);
+  }
+
+  function changeSpeed(value: number) {
+    setSpeed(value);
+    playerRef.current.setSpeed(value);
+  }
+
   return (
     <main className="app-shell">
-      <section className="hero">
+      <header className="top-bar">
         <div>
           <p className="eyebrow">midi-studio</p>
-          <h1>Desktop MIDI Practice Studio</h1>
-          <p className="lede">
-            React and Electron are running. Player features will be built on top
-            of this foundation.
-          </p>
+          <h1>简谱 MIDI 播放器</h1>
         </div>
-        <div className="runtime-panel" aria-label="Runtime information">
-          <span>Electron</span>
-          <strong>{window.midiStudio.appVersion}</strong>
-          <span>Platform</span>
-          <strong>{window.midiStudio.platform}</strong>
+        <div className="top-actions">
+          <button className="button secondary" type="button" onClick={() => fileInputRef.current?.click()}>
+            打开 MIDI
+          </button>
+          <input
+            ref={fileInputRef}
+            className="file-input"
+            type="file"
+            accept=".mid,.midi,audio/midi"
+            onChange={handleFileChange}
+          />
         </div>
+      </header>
+
+      <section className="workspace">
+        <aside className="sidebar">
+          <dl className="song-meta">
+            <div>
+              <dt>曲目</dt>
+              <dd>{song?.title ?? "未载入"}</dd>
+            </div>
+            <div>
+              <dt>调性</dt>
+              <dd>{song?.keyName ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>BPM</dt>
+              <dd>{song?.bpm ? Math.round(song.bpm) : "-"}</dd>
+            </div>
+            <div>
+              <dt>轨道</dt>
+              <dd>{song?.trackCount ?? "-"}</dd>
+            </div>
+            <div>
+              <dt>音符</dt>
+              <dd>{song?.noteCount ?? "-"}</dd>
+            </div>
+          </dl>
+          {error ? <p className="error-text">{error}</p> : null}
+        </aside>
+
+        <section className="notation-panel" aria-label="简谱">
+          {song ? (
+            <NumberedNotation
+              activeClusterId={activeClusterId}
+              clusters={song.clusters}
+              positionMs={snapshot.positionMs}
+            />
+          ) : (
+            <div className="empty-state">
+              <strong>打开一个 MIDI 文件</strong>
+              <span>支持 .mid 和 .midi</span>
+            </div>
+          )}
+        </section>
       </section>
+
+      <footer className="transport">
+        <div className="transport-row">
+          <button className="button primary play-button" type="button" onClick={togglePlay}>
+            {snapshot.status === "playing" ? "暂停" : "播放"}
+          </button>
+          <button className="button secondary" type="button" onClick={stopPlayback} disabled={!song}>
+            停止
+          </button>
+          <div className="time-readout">
+            <span>{formatTime(snapshot.positionMs)}</span>
+            <span>/</span>
+            <span>{formatTime(song?.durationMs ?? 0)}</span>
+          </div>
+          <label className="speed-control">
+            <span>速度</span>
+            <input
+              type="range"
+              min="50"
+              max="150"
+              step="5"
+              value={speed}
+              disabled={!song}
+              onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
+            />
+            <strong>{speed}%</strong>
+          </label>
+        </div>
+        <div className="progress-wrap">
+          <input
+            className="progress-input"
+            type="range"
+            min="0"
+            max={Math.max(1, Math.round(song?.durationMs ?? 1))}
+            step="1"
+            value={Math.round(snapshot.positionMs)}
+            disabled={!song}
+            onChange={(event) => seekTo(Number(event.currentTarget.value))}
+            aria-label="播放进度"
+          />
+          <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+        </div>
+      </footer>
     </main>
+  );
+}
+
+type NumberedNotationProps = {
+  clusters: NoteCluster[];
+  activeClusterId: string;
+  positionMs: number;
+};
+
+function NumberedNotation({ clusters, activeClusterId, positionMs }: NumberedNotationProps) {
+  return (
+    <div className="numbered-score">
+      {clusters.map((cluster) => {
+        const isActive = cluster.id === activeClusterId;
+        const isPast = cluster.endMs < positionMs;
+
+        return (
+          <span
+            key={cluster.id}
+            className={`note-token${isActive ? " active" : ""}${isPast ? " past" : ""}`}
+            title={`${formatTime(cluster.startMs)} ${cluster.notes.map((note) => note.name).join(" ")}`}
+          >
+            {cluster.label}
+          </span>
+        );
+      })}
+    </div>
   );
 }
