@@ -3,9 +3,11 @@
 midi-studio is an open-source desktop MIDI practice studio built with React,
 Electron, Vite, and TypeScript.
 
-The project is currently at the framework baseline stage. The app can install,
-type-check, build, and launch, but MIDI playback, score rendering, soundfont
-rendering, and timeline synchronization are intentionally not implemented yet.
+The current version is an early playable prototype. It can open local MIDI
+files, parse note events, play them with a lightweight Web Audio synthesizer,
+show numbered notation, and highlight playback progress. Full staff notation,
+soundfont playback, and advanced export workflows are planned but not part of
+this first version yet.
 
 ## Goals
 
@@ -22,6 +24,12 @@ rendering, and timeline synchronization are intentionally not implemented yet.
 - React renderer scaffolded.
 - Vite development server configured.
 - TypeScript compilation configured for renderer and Electron code.
+- Local `.mid` / `.midi` file import.
+- MIDI parsing through `@tonejs/midi`.
+- Numbered notation rendering.
+- Pure Web Audio synthesis playback.
+- Playback controls: play, pause, stop, seek, and speed.
+- Windows portable `.exe` packaging configuration.
 
 ## Requirements
 
@@ -58,6 +66,21 @@ Build the app:
 npm run build
 ```
 
+Build a Windows portable executable:
+
+```bash
+npm run dist:portable
+```
+
+The portable build is written to:
+
+```text
+release/midi-studio-0.1.0-portable.exe
+```
+
+This build is unsigned. Windows may show a SmartScreen warning until the app is
+code-signed.
+
 Preview the built renderer:
 
 ```bash
@@ -78,6 +101,8 @@ npm run typecheck
 | `npm run dev:renderer` | Starts the Vite renderer server only. |
 | `npm run dev:electron` | Waits for Vite, compiles Electron code, and starts Electron. |
 | `npm run build` | Builds Electron main/preload code and the renderer bundle. |
+| `npm run dist:dir` | Builds an unpacked Windows app directory for debugging packaging output. |
+| `npm run dist:portable` | Builds an unsigned Windows portable executable. |
 | `npm run preview` | Serves the built renderer bundle locally. |
 | `npm run typecheck` | Runs TypeScript checks for both renderer and Electron projects. |
 
@@ -88,7 +113,7 @@ midi-studio/
   src/
     main/       Electron main process
     preload/    Isolated bridge exposed to the renderer
-    renderer/   React application
+    renderer/   React application and MIDI player prototype
   index.html    Vite HTML entry
 ```
 
@@ -102,12 +127,32 @@ midi-studio/
   renderer window.
 - Development loads the renderer from Vite.
 - Production loads the built renderer from `dist/renderer/index.html`.
+- Windows portable builds disable executable signing/resource editing with
+  `win.signAndEditExecutable: false` so unsigned portable builds do not require
+  local symlink privileges for `winCodeSign`.
+
+## Packaging Notes
+
+The project targets portable Windows builds first. The configured command is:
+
+```bash
+npm run dist:portable
+```
+
+It uses `electron-builder` with the `portable` target and writes artifacts to
+`release/`, which is ignored by git.
+
+The script sets `CSC_IDENTITY_AUTO_DISCOVERY=false` and the Windows builder
+configuration sets `signAndEditExecutable: false`. This intentionally skips
+code signing for local unsigned builds and avoids `winCodeSign` extraction
+errors on Windows accounts that cannot create symbolic links.
 
 ## Roadmap
 
 - Import local MIDI files.
-- Build a playback engine abstraction.
-- Add notation rendering.
+- Improve the playback engine abstraction.
+- Improve numbered notation rendering.
+- Add staff notation rendering.
 - Add piano keyboard playback visualization.
 - Add soundfont-backed audio.
 - Add offline MP3 rendering and timeline mapping.

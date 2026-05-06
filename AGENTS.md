@@ -5,8 +5,9 @@ Guidance for coding agents working in this repository.
 ## Project
 
 `midi-studio` is a React + Electron + Vite + TypeScript desktop application.
-It is currently a clean scaffold for a future MIDI player and practice studio.
-Do not add MIDI player features unless the user explicitly asks for them.
+It currently contains an early local MIDI player prototype with numbered
+notation and pure Web Audio synthesis. Staff notation, soundfont playback,
+and advanced exports are not implemented yet.
 
 ## Working Directory
 
@@ -42,11 +43,22 @@ Build:
 npm run build
 ```
 
+Build a Windows portable executable:
+
+```bash
+npm run dist:portable
+```
+
+The portable artifact is written to `release/`, which is ignored by git.
+
 ## Code Ownership
 
 - `src/main/`: Electron main process and application lifecycle.
 - `src/preload/`: Safe bridge between Electron and renderer.
-- `src/renderer/`: React UI.
+- `src/renderer/`: React UI and player prototype.
+- `src/renderer/lib/midi.ts`: MIDI parsing and normalized song model.
+- `src/renderer/lib/notation.ts`: numbered notation and time formatting helpers.
+- `src/renderer/lib/synthPlayer.ts`: pure Web Audio playback engine.
 - `vite.config.ts`: Renderer build and dev server configuration.
 - `tsconfig.electron.json`: Electron main/preload TypeScript build.
 - `tsconfig.json`: Renderer TypeScript configuration.
@@ -62,6 +74,9 @@ npm run build
 - Do not commit generated folders such as `node_modules`, `dist`, or `logs`.
 - Do not introduce large framework changes without a clear reason.
 - Keep dependencies conservative while the project still targets Node 16.
+- Keep `release/` ignored; portable executables must not be committed.
+- Do not enable Windows signing/resource editing unless the build environment
+  has the required signing and symlink permissions.
 
 ## Frontend Rules
 
@@ -82,6 +97,16 @@ npm run typecheck
 npm run build
 ```
 
+For packaging configuration changes, run at least:
+
+```bash
+npm run typecheck
+npm run build
+```
+
+Run `npm run dist:portable` only when explicitly asked, because it downloads
+Electron/builder binaries and writes portable artifacts to `release/`.
+
 For UI changes, also launch:
 
 ```bash
@@ -96,11 +121,10 @@ http://127.0.0.1:5173
 
 ## Current Feature Boundary
 
-The initial scaffold should remain feature-light. The next major work should be
-planned before implementation, especially around:
+The prototype supports local MIDI import, numbered notation, pure synthesis,
+basic transport controls, seeking, and speed changes. The next major work
+should be planned before implementation, especially around:
 
-- MIDI parsing.
-- Audio playback architecture.
 - Soundfont integration.
 - Offline rendering.
 - Score rendering.
