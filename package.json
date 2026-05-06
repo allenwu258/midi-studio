@@ -1,0 +1,33 @@
+{
+  "name": "midi-studio",
+  "version": "0.1.0",
+  "description": "Open-source desktop MIDI practice studio built with React and Electron.",
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"npm:dev:renderer\" \"npm:dev:electron\"",
+    "dev:renderer": "vite --host 127.0.0.1 --port 5173",
+    "dev:electron": "wait-on tcp:5173 && tsc -p tsconfig.electron.json && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .",
+    "build": "tsc -p tsconfig.electron.json && vite build",
+    "preview": "vite preview --host 127.0.0.1 --port 4173",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit"
+  },
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.120",
+    "@types/react": "^18.2.79",
+    "@types/react-dom": "^18.2.25",
+    "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "electron": "^25.9.8",
+    "typescript": "^5.4.5",
+    "vite": "^4.5.5",
+    "wait-on": "^7.2.0"
+  }
+}
