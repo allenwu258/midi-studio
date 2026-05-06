@@ -6,8 +6,9 @@ Guidance for coding agents working in this repository.
 
 `midi-studio` is a React + Electron + Vite + TypeScript desktop application.
 It currently contains an early local MIDI player prototype with numbered
-notation and pure Web Audio synthesis. Staff notation, soundfont playback,
-and advanced exports are not implemented yet.
+notation, pure Web Audio synthesis, alphaSynth + SF2 playback, and persistent
+settings. Staff notation, piano keyboard visualization, and advanced exports
+are not implemented yet.
 
 ## Working Directory
 
@@ -59,6 +60,14 @@ The portable artifact is written to `release/`, which is ignored by git.
 - `src/renderer/lib/midi.ts`: MIDI parsing and normalized song model.
 - `src/renderer/lib/notation.ts`: numbered notation and time formatting helpers.
 - `src/renderer/lib/synthPlayer.ts`: pure Web Audio playback engine.
+- `src/renderer/lib/player/alphaSynthPlayer.ts`: alphaSynth + SF2 playback
+  engine wrapper.
+- `src/renderer/lib/player/createPlayer.ts`: playback engine factory.
+- `src/main/settings/`: SQLite-backed settings storage and IPC handlers.
+- `src/main/resources/resourceProtocol.ts`: Electron custom protocol for
+  bundled alphaSynth/SF2 resources.
+- `public/vendor/alphasynth/`: bundled alphaSynth browser script.
+- `public/soundfonts/`: bundled SF2 SoundFont assets.
 - `vite.config.ts`: Renderer build and dev server configuration.
 - `tsconfig.electron.json`: Electron main/preload TypeScript build.
 - `tsconfig.json`: Renderer TypeScript configuration.
@@ -77,6 +86,10 @@ The portable artifact is written to `release/`, which is ignored by git.
 - Keep `release/` ignored; portable executables must not be committed.
 - Do not enable Windows signing/resource editing unless the build environment
   has the required signing and symlink permissions.
+- Do not import files from `public/` in renderer source. Runtime audio assets
+  must be loaded through `midi-studio-resource://assets/...`.
+- Do not replace bundled SF2 assets without confirming redistribution rights
+  and updating README documentation.
 
 ## Frontend Rules
 
@@ -107,6 +120,15 @@ npm run build
 Run `npm run dist:portable` only when explicitly asked, because it downloads
 Electron/builder binaries and writes portable artifacts to `release/`.
 
+When touching alphaSynth/SF2 loading, also verify:
+
+```bash
+npm run build
+```
+
+Then check that `dist/renderer/vendor/alphasynth/alphaSynth.min.js` and
+`dist/renderer/soundfonts/midiSound-2025-1-14.sf2` exist.
+
 For UI changes, also launch:
 
 ```bash
@@ -122,10 +144,10 @@ http://127.0.0.1:5173
 ## Current Feature Boundary
 
 The prototype supports local MIDI import, numbered notation, pure synthesis,
-basic transport controls, seeking, and speed changes. The next major work
-should be planned before implementation, especially around:
+alphaSynth + SF2 playback, persistent settings, basic transport controls,
+seeking, speed changes, and master volume. The next major work should be
+planned before implementation, especially around:
 
-- Soundfont integration.
 - Offline rendering.
 - Score rendering.
 - Timeline synchronization.

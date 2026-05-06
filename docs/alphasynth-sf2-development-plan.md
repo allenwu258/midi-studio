@@ -2,6 +2,8 @@
 
 本文档描述在 `midi-studio` 中接入 v3 本地 `alphaSynth + SF2` 播放架构，并新增设置页面与 SQLite 持久化的第一阶段开发计划。目标是支持用户在“纯 MIDI/基础合成”和“SF2 合成”两种播放模式之间切换，用真实 SoundFont MIDI 合成改善音色，同时保留现有 React + Electron 工程结构、MIDI 解析、简谱同步和进度条能力。
 
+> 当前实现状态：第一阶段已经落地。代码已包含 alphaSynth 播放器、SF2 资源、Electron 自定义资源协议、设置页、SQLite 持久化、主音量接入和播放模式切换竞态保护。本文档保留设计背景，同时标注实际实现与原计划差异。
+
 ## 1. 背景
 
 当前 `midi-studio` v1 使用 `src/renderer/lib/synthPlayer.ts` 中的 Web Audio 振荡器直接生成音色。优点是依赖少、实现轻，但声音不自然，主要问题包括：
@@ -30,7 +32,7 @@ C:\Users\Trivedi\projects\midi-gui-player-v3\assets\midiSound-2025-1-14.sf2
 - 新增设置页面，允许用户切换播放模式：
   - `basic-midi`：纯 MIDI/基础合成模式，沿用当前轻量 Web Audio 合成器。
   - `sf2-synth`：SF2 合成模式，使用 alphaSynth 加载本地 SoundFont。
-- 使用 SQLite 保存用户设置，数据库放在 exe 同级 `data` 目录内。
+- 使用 SQLite 保存用户设置，数据库放在 exe 同级 `data` 目录内；portable 版本优先使用 `PORTABLE_EXECUTABLE_DIR` 解析真实 portable exe 所在目录。
 
 ## 3. 不做范围
 
@@ -131,6 +133,8 @@ src/renderer/types/
 src/main/settings/
   settingsDb.ts
   settingsService.ts
+src/main/resources/
+  resourceProtocol.ts
 public/vendor/alphasynth/
   alphaSynth.min.js
 public/soundfonts/
@@ -142,9 +146,10 @@ public/soundfonts/
 - `synthPlayer.ts` 从当前 `src/renderer/lib/synthPlayer.ts` 迁入，作为 fallback。
 - `alphaSynthPlayer.ts` 封装 `window.alphaSynth.AlphaSynthApi`，不让 React 组件直接碰全局对象。
 - `createPlayer.ts` 根据持久化设置切换 `sf2-synth` / `basic-midi`。
-- `settingsDb.ts` 负责创建 exe 同级 `data/midi-studio.sqlite3` 和数据库迁移。
+- `settingsDb.ts` 负责创建 exe 同级 `data/midi-studio.sqlite3` 和数据库迁移，生产 portable 环境优先使用 `process.env.PORTABLE_EXECUTABLE_DIR`。
 - `settingsService.ts` 负责设置读写、默认值合并和 IPC handler。
-- `public/` 资源会被 Vite 复制到 renderer 根路径，开发和生产都可通过相对 URL 请求。
+- `resourceProtocol.ts` 注册 `midi-studio-resource://assets/...`，统一开发和 portable 资源加载路径。
+- `public/` 资源会被 Vite 复制到 renderer 根路径，但 renderer 不直接 import 这些文件；运行时通过 Electron 自定义协议读取白名单资源。
 
 ## 6. 设置页与持久化设计
 
@@ -211,7 +216,9 @@ data/
 生产环境路径：
 
 ```ts
-const appDir = path.dirname(process.execPath);
+const appDir = app.isPackaged
+  ? process.env.PORTABLE_EXECUTABLE_DIR ?? path.dirname(process.execPath)
+  : process.cwd();
 const dataDir = path.join(appDir, "data");
 const dbPath = path.join(dataDir, "midi-studio.sqlite3");
 ```
@@ -225,7 +232,7 @@ C:\Users\Trivedi\projects\midi-studio\data\midi-studio.sqlite3
 原因：
 
 - 开发环境没有最终 exe，使用项目根目录 `data` 最直观。
-- 生产环境使用 `process.execPath` 的同级目录，符合 portable exe 的用户预期。
+- 生产环境优先使用 `PORTABLE_EXECUTABLE_DIR`，符合 electron-builder portable target 的真实 exe 目录；如果该变量不存在，再 fallback 到 `path.dirname(process.execPath)`。
 
 注意：
 
@@ -292,17 +299,22 @@ renderer 启动流程：
 
 ### 7.1 alphaSynth 脚本
 
-短期方案：在 `index.html` 中加载本地脚本。
+实际方案：renderer 在需要 `sf2-synth` 时动态插入脚本标签，脚本 URL 走 Electron 自定义协议。
 
-```html
-<script src="/vendor/alphasynth/alphaSynth.min.js"></script>
+```ts
+const ALPHASYNTH_SCRIPT_URL =
+  "midi-studio-resource://assets/vendor/alphasynth/alphaSynth.min.js";
 ```
 
 优点：
 
-- 与 v3 行为一致。
+- 不把 alphaSynth UMD 文件 import 进 Vite bundle。
+- 不从 renderer source 直接 import `public/` 文件，避免 Vite public 资源检查。
+- 开发环境和 portable 构建使用同一条资源路径。
 - 避免先处理 UMD 包的 TypeScript/Vite 打包细节。
 - alphaSynth 自身会创建 worker/audio worklet，脚本 URL 更稳定。
+
+脚本加载失败后会清空缓存 promise 并移除失败标签，允许用户切换模式或重新加载时再次尝试。
 
 后续方案：若确认 npm 包或源码包可稳定使用，再改为依赖安装和 ESM/worker 集成。
 
@@ -317,10 +329,11 @@ public/soundfonts/midiSound-2025-1-14.sf2
 运行时路径：
 
 ```ts
-const soundFontUrl = "/soundfonts/midiSound-2025-1-14.sf2";
+const soundFontUrl =
+  "midi-studio-resource://assets/soundfonts/midiSound-2025-1-14.sf2";
 ```
 
-Electron production 中，Vite 会把 public 内容复制到 `dist/renderer/`。当前 electron-builder `files` 已包含 `dist/**/*`，因此 portable 包会带上 SF2。
+Electron production 中，Vite 会把 public 内容复制到 `dist/renderer/`。当前 electron-builder `files` 已包含 `dist/**/*`，因此 portable 包会带上 SF2。`asarUnpack` 也显式包含 `dist/renderer/soundfonts/**/*` 与 `dist/renderer/vendor/alphasynth/**/*`。
 
 ## 8. package.json 影响
 
@@ -363,9 +376,9 @@ SQLite 相关注意事项：
 
 - 从 v3 复制 `alphaSynth.min.js` 到 `public/vendor/alphasynth/`。
 - 从 v3 复制 `midiSound-2025-1-14.sf2` 到 `public/soundfonts/`。
-- 在 `index.html` 加载 alphaSynth 脚本。
+- 通过 `midi-studio-resource://assets/vendor/alphasynth/alphaSynth.min.js` 动态加载 alphaSynth 脚本。
 - 新增 `src/renderer/types/alphaSynth.d.ts`，声明最小可用 API。
-- 更新 README/AGENTS，说明本地 SoundFont 资源和授权前提。
+- 更新 README/AGENTS，说明本地 SoundFont 资源、授权前提、自定义协议和 SQLite 数据目录。
 
 验收：
 
@@ -430,7 +443,7 @@ SQLite 相关注意事项：
 
 - 创建 `AlphaSynthPlayer`。
 - 初始化时设置：
-  - `soundFont = "/soundfonts/midiSound-2025-1-14.sf2"`
+  - `soundFont = "midi-studio-resource://assets/soundfonts/midiSound-2025-1-14.sf2"`
   - `bufferTimeInMilliseconds = 1000`
   - `logLevel = alphaSynth.LogLevel.None`
 - `load()` 中保存 MIDI 原始 bytes，等待 `soundFontLoaded` 后调用 `loadMidiFile()`。
@@ -491,17 +504,18 @@ alphaSynth 会根据当前脚本路径创建 worker/audio worklet。如果脚本
 
 应对：
 
-- 第一版用 `public/vendor/alphasynth/alphaSynth.min.js` 加 `<script>` 直连。
+- 第一版通过 `midi-studio-resource://assets/vendor/alphasynth/alphaSynth.min.js` 动态加载脚本。
 - 不把 alphaSynth 交给 Vite bundle。
 
 ### 10.2 Electron file/protocol 资源加载
 
-生产环境中页面从 `file://.../dist/renderer/index.html` 加载，相对资源路径必须可解析。
+Electron renderer 在 dev/prod 中分别运行在 `http://127.0.0.1:5173` 和打包后的 renderer 页面下，普通相对资源 URL 容易出现差异。
 
 应对：
 
-- 优先使用绝对根路径 `/soundfonts/...` 在 Vite dev 中验证。
-- 若 Electron production 下根路径不稳定，则改为相对路径 `./soundfonts/...`，并通过 `new URL()` 统一生成。
+- 已采用 Electron 自定义协议 `midi-studio-resource://assets/...`。
+- main process 只白名单开放 alphaSynth JS 和当前 SF2 文件，避免暴露任意本地路径。
+- dev 环境从 `public/` 读取，production 从 `dist/renderer/` 读取。
 - 用 `dist:dir` 先验证 unpacked 目录。
 
 ### 10.3 大文件纳入 Git
