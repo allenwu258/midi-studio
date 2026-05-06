@@ -33,6 +33,7 @@ export class SynthPlayer {
     this.notes = notes;
     this.durationMs = durationMs;
     this.positionMs = 0;
+    this.speed = 1;
     this.status = "idle";
     this.nextNoteIndex = 0;
     this.emit();
@@ -185,8 +186,11 @@ export class SynthPlayer {
   }
 
   private scheduleNote(context: AudioContext, note: MidiNote, positionMs: number): void {
-    const startAt = context.currentTime + Math.max(0, (note.startMs - positionMs) / 1000 / this.speed);
-    const durationSeconds = Math.max(0.03, note.durationMs / 1000 / this.speed);
+    const startDelayMs = Math.max(0, note.startMs - positionMs);
+    const audibleStartMs = Math.max(positionMs, note.startMs);
+    const remainingMs = Math.max(0, note.endMs - audibleStartMs);
+    const startAt = context.currentTime + startDelayMs / 1000 / this.speed;
+    const durationSeconds = Math.max(0.03, remainingMs / 1000 / this.speed);
     const endAt = startAt + durationSeconds;
     const oscillator = context.createOscillator();
     const gain = context.createGain();

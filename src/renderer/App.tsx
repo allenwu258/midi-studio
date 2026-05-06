@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { parseMidiFile, type NoteCluster, type ParsedSong } from "./lib/midi";
 import { formatTime } from "./lib/notation";
 import { SynthPlayer, type PlayerSnapshot } from "./lib/synthPlayer";
@@ -13,35 +13,24 @@ export function App() {
 
   useEffect(() => {
     const unsubscribe = playerRef.current.subscribe(setSnapshot);
-    let frame = 0;
+    const intervalId = window.setInterval(() => {
+      const nextSnapshot = playerRef.current.getSnapshot();
 
-    const update = () => {
-      setSnapshot(playerRef.current.getSnapshot());
-      frame = window.requestAnimationFrame(update);
-    };
+      setSnapshot((previousSnapshot) =>
+        areSnapshotsEqual(previousSnapshot, nextSnapshot) ? previousSnapshot : nextSnapshot
+      );
+    }, 33);
 
-    frame = window.requestAnimationFrame(update);
     return () => {
       unsubscribe();
-      window.cancelAnimationFrame(frame);
+      window.clearInterval(intervalId);
     };
   }, []);
 
-  const activeCluster = useMemo(() => {
-    if (!song) {
-      return null;
-    }
-
-    return (
-      song.clusters.find(
-        (cluster) =>
-          snapshot.positionMs >= cluster.startMs &&
-          snapshot.positionMs <= Math.max(cluster.endMs, cluster.startMs + 180)
-      ) ?? null
-    );
+  const clusterPlayback = useMemo(() => {
+    return song ? findClusterPlayback(song.clusters, snapshot.positionMs) : { activeIndex: -1, pastIndex: -1 };
   }, [snapshot.positionMs, song]);
 
-  const activeClusterId = activeCluster?.id ?? "";
   const progressPercent = song?.durationMs
     ? Math.min(100, (snapshot.positionMs / song.durationMs) * 100)
     : 0;
@@ -146,9 +135,9 @@ export function App() {
         <section className="notation-panel" aria-label="简谱">
           {song ? (
             <NumberedNotation
-              activeClusterId={activeClusterId}
+              activeClusterIndex={clusterPlayback.activeIndex}
               clusters={song.clusters}
-              positionMs={snapshot.positionMs}
+              pastClusterIndex={clusterPlayback.pastIndex}
             />
           ) : (
             <div className="empty-state">
@@ -207,27 +196,78 @@ export function App() {
 
 type NumberedNotationProps = {
   clusters: NoteCluster[];
-  activeClusterId: string;
-  positionMs: number;
+  activeClusterIndex: number;
+  pastClusterIndex: number;
 };
 
-function NumberedNotation({ clusters, activeClusterId, positionMs }: NumberedNotationProps) {
+function NumberedNotation({ clusters, activeClusterIndex, pastClusterIndex }: NumberedNotationProps) {
   return (
     <div className="numbered-score">
-      {clusters.map((cluster) => {
-        const isActive = cluster.id === activeClusterId;
-        const isPast = cluster.endMs < positionMs;
-
-        return (
-          <span
-            key={cluster.id}
-            className={`note-token${isActive ? " active" : ""}${isPast ? " past" : ""}`}
-            title={`${formatTime(cluster.startMs)} ${cluster.notes.map((note) => note.name).join(" ")}`}
-          >
-            {cluster.label}
-          </span>
-        );
-      })}
+      {clusters.map((cluster, index) => (
+        <NoteToken
+          key={cluster.id}
+          cluster={cluster}
+          isActive={index === activeClusterIndex}
+          isPast={index <= pastClusterIndex && index !== activeClusterIndex}
+        />
+      ))}
     </div>
+  );
+}
+
+type NoteTokenProps = {
+  cluster: NoteCluster;
+  isActive: boolean;
+  isPast: boolean;
+};
+
+const NoteToken = memo(function NoteToken({ cluster, isActive, isPast }: NoteTokenProps) {
+  return (
+    <span
+      className={`note-token${isActive ? " active" : ""}${isPast ? " past" : ""}`}
+      title={`${formatTime(cluster.startMs)} ${cluster.notes.map((note) => note.name).join(" ")}`}
+    >
+      {cluster.label}
+    </span>
+  );
+});
+
+function findClusterPlayback(
+  clusters: NoteCluster[],
+  positionMs: number
+): { activeIndex: number; pastIndex: number } {
+  let low = 0;
+  let high = clusters.length - 1;
+  let candidate = -1;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+
+    if (clusters[mid].startMs <= positionMs) {
+      candidate = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  if (candidate < 0) {
+    return { activeIndex: -1, pastIndex: -1 };
+  }
+
+  const cluster = clusters[candidate];
+  const isActive = positionMs <= Math.max(cluster.endMs, cluster.startMs + 180);
+
+  return {
+    activeIndex: isActive ? candidate : -1,
+    pastIndex: cluster.endMs < positionMs ? candidate : candidate - 1
+  };
+}
+
+function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean {
+  return (
+    left.status === right.status &&
+    left.durationMs === right.durationMs &&
+    Math.round(left.positionMs) === Math.round(right.positionMs)
   );
 }
