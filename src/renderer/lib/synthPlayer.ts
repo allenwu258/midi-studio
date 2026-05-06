@@ -8,10 +8,12 @@ type ScheduledVoice = {
 
 export class SynthPlayer implements MidiPlaybackEngine {
   private audioContext: AudioContext | null = null;
+  private masterGain: GainNode | null = null;
   private notes: MidiNote[] = [];
   private durationMs = 0;
   private positionMs = 0;
   private speed = 1;
+  private masterVolume = 1;
   private status: PlayerStatus = "idle";
   private playStartedAt = 0;
   private playStartedPosition = 0;
@@ -101,6 +103,15 @@ export class SynthPlayer implements MidiPlaybackEngine {
     this.seek(currentPosition);
   }
 
+  setMasterVolume(percent: number): void {
+    this.masterVolume = clampVolume(percent);
+    this.masterGain?.gain.setTargetAtTime(
+      this.masterVolume,
+      this.audioContext?.currentTime ?? 0,
+      0.01
+    );
+  }
+
   getSnapshot(): PlayerSnapshot {
     const positionMs = this.getPositionMs();
     return {
@@ -123,11 +134,15 @@ export class SynthPlayer implements MidiPlaybackEngine {
     this.listeners.clear();
     void this.audioContext?.close();
     this.audioContext = null;
+    this.masterGain = null;
   }
 
   private getAudioContext(): AudioContext {
     if (!this.audioContext) {
       this.audioContext = new AudioContext();
+      this.masterGain = this.audioContext.createGain();
+      this.masterGain.gain.value = this.masterVolume;
+      this.masterGain.connect(this.audioContext.destination);
     }
     return this.audioContext;
   }
@@ -205,7 +220,7 @@ export class SynthPlayer implements MidiPlaybackEngine {
     gain.gain.exponentialRampToValueAtTime(0.0001, endAt + 0.05);
 
     oscillator.connect(gain);
-    gain.connect(context.destination);
+    gain.connect(this.getMasterGain(context));
     oscillator.start(startAt);
     oscillator.stop(endAt + 0.08);
 
@@ -228,6 +243,16 @@ export class SynthPlayer implements MidiPlaybackEngine {
       voice.gain.disconnect();
     }
     this.scheduledVoices.clear();
+  }
+
+  private getMasterGain(context: AudioContext): GainNode {
+    if (!this.masterGain) {
+      this.masterGain = context.createGain();
+      this.masterGain.gain.value = this.masterVolume;
+      this.masterGain.connect(context.destination);
+    }
+
+    return this.masterGain;
   }
 
   private findNextNoteIndex(positionMs: number): number {
@@ -262,4 +287,8 @@ export class SynthPlayer implements MidiPlaybackEngine {
 
 function midiToFrequency(midi: number): number {
   return 440 * 2 ** ((midi - 69) / 12);
+}
+
+function clampVolume(percent: number): number {
+  return Math.max(0, Math.min(percent / 100, 1));
 }

@@ -15,11 +15,18 @@ type AppView = "player" | "settings";
 export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const playerRef = useRef<MidiPlaybackEngine>(
-    createPlayer({ mode: DEFAULT_SETTINGS.playbackEngineMode })
+    createPlayer({
+      mode: DEFAULT_SETTINGS.playbackEngineMode,
+      masterVolumePercent: DEFAULT_SETTINGS.masterVolumePercent
+    })
   );
   const playerModeRef = useRef(DEFAULT_SETTINGS.playbackEngineMode);
   const playerUnsubscribeRef = useRef<(() => void) | null>(null);
   const currentLoadInputRef = useRef<PlayerLoadInput | null>(null);
+  const loadGenerationRef = useRef(0);
+  const settingsRef = useRef<UserSettings>(DEFAULT_SETTINGS);
+  const settingsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const pendingSettingsSaveCountRef = useRef(0);
   const [song, setSong] = useState<ParsedSong | null>(null);
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
   const [speed, setSpeed] = useState(100);
@@ -62,10 +69,14 @@ export function App() {
           return;
         }
 
-        setSettings(nextSettings);
+        commitSettings(nextSettings);
         setStorageInfo(nextStorageInfo);
         setSpeed(nextSettings.defaultSpeedPercent);
-        await switchPlayer(nextSettings.playbackEngineMode, { reloadCurrentSong: false });
+        playerRef.current.setMasterVolume(nextSettings.masterVolumePercent);
+        await switchPlayer(nextSettings.playbackEngineMode, {
+          reloadCurrentSong: false,
+          settings: nextSettings
+        });
       } catch (err) {
         if (!isMounted) {
           return;
@@ -96,6 +107,9 @@ export function App() {
       return;
     }
 
+    let loadGeneration = loadGenerationRef.current;
+    let loadingPlayer = playerRef.current;
+
     try {
       setError("");
       const buffer = await file.arrayBuffer();
@@ -107,15 +121,23 @@ export function App() {
         durationMs: parsedSong.durationMs
       };
 
+      loadGeneration = loadGenerationRef.current + 1;
+      loadingPlayer = playerRef.current;
+      loadGenerationRef.current = loadGeneration;
       currentLoadInputRef.current = loadInput;
       setSong(parsedSong);
-      playerRef.current.setSpeed(settings.defaultSpeedPercent);
+      loadingPlayer.setSpeed(settings.defaultSpeedPercent);
+      loadingPlayer.setMasterVolume(settings.masterVolumePercent);
       setSpeed(settings.defaultSpeedPercent);
-      await playerRef.current.load(loadInput);
+      await loadingPlayer.load(loadInput);
     } catch (err) {
+      if (loadGenerationRef.current !== loadGeneration || playerRef.current !== loadingPlayer) {
+        return;
+      }
+
       setSong(null);
       currentLoadInputRef.current = null;
-      playerRef.current.stop();
+      loadingPlayer.stop();
       setError(err instanceof Error ? err.message : "MIDI 或音频加载失败。");
     } finally {
       event.currentTarget.value = "";
@@ -150,40 +172,101 @@ export function App() {
   }
 
   async function updateSettings(patch: Partial<UserSettings>) {
+    pendingSettingsSaveCountRef.current += 1;
+    setIsSavingSettings(true);
+
+    const queuedUpdate = settingsSaveQueueRef.current
+      .catch(() => undefined)
+      .then(() => applySettingsUpdate(patch))
+      .finally(() => {
+        pendingSettingsSaveCountRef.current -= 1;
+        if (pendingSettingsSaveCountRef.current === 0) {
+          setIsSavingSettings(false);
+        }
+      });
+
+    settingsSaveQueueRef.current = queuedUpdate.catch(() => undefined);
+    return queuedUpdate;
+  }
+
+  async function applySettingsUpdate(patch: Partial<UserSettings>) {
+    const previousSettings = settingsRef.current;
+
     try {
-      setIsSavingSettings(true);
       setSettingsError("");
-      const previousMode = settings.playbackEngineMode;
       const nextSettings = await window.midiStudio.settings.update(patch);
-      setSettings(nextSettings);
-      if (nextSettings.playbackEngineMode !== previousMode) {
-        await switchPlayer(nextSettings.playbackEngineMode, { reloadCurrentSong: true });
+      playerRef.current.setMasterVolume(nextSettings.masterVolumePercent);
+
+      if (nextSettings.playbackEngineMode !== previousSettings.playbackEngineMode) {
+        try {
+          await switchPlayer(nextSettings.playbackEngineMode, {
+            reloadCurrentSong: true,
+            settings: nextSettings
+          });
+        } catch (switchError) {
+          const revertedSettings = await window.midiStudio.settings.update({
+            playbackEngineMode: previousSettings.playbackEngineMode
+          });
+          commitSettings(revertedSettings);
+          playerRef.current.setMasterVolume(revertedSettings.masterVolumePercent);
+          throw new Error(
+            `播放模式切换失败：${
+              switchError instanceof Error ? switchError.message : "播放器加载失败。"
+            }`
+          );
+        }
       }
+
+      commitSettings(nextSettings);
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "设置保存失败。");
-    } finally {
-      setIsSavingSettings(false);
     }
   }
 
   async function switchPlayer(
     mode: UserSettings["playbackEngineMode"],
-    options: { reloadCurrentSong: boolean }
+    options: { reloadCurrentSong: boolean; settings: UserSettings }
   ) {
     if (playerModeRef.current === mode) {
       return;
     }
 
     const previousPlayer = playerRef.current;
+    const loadInput = currentLoadInputRef.current;
+    const expectedLoadInput = loadInput;
+    const nextPlayer = createPlayer({
+      mode,
+      masterVolumePercent: options.settings.masterVolumePercent
+    });
+
+    nextPlayer.setSpeed(speed);
+
+    try {
+      if (options.reloadCurrentSong && loadInput) {
+        const switchLoadGeneration = loadGenerationRef.current + 1;
+
+        loadGenerationRef.current = switchLoadGeneration;
+        await nextPlayer.load(loadInput);
+        if (
+          loadGenerationRef.current !== switchLoadGeneration ||
+          currentLoadInputRef.current !== expectedLoadInput ||
+          playerRef.current !== previousPlayer
+        ) {
+          throw new Error("播放模式切换已被新的 MIDI 加载取消。");
+        }
+      }
+    } catch (err) {
+      nextPlayer.dispose();
+      setSnapshot(previousPlayer.getSnapshot());
+      throw err;
+    }
+
     const previousSnapshot = previousPlayer.getSnapshot();
     const wasPlaying = previousSnapshot.status === "playing";
     const resumePositionMs = previousSnapshot.positionMs;
-    const loadInput = currentLoadInputRef.current;
 
     playerUnsubscribeRef.current?.();
     previousPlayer.dispose();
-
-    const nextPlayer = createPlayer({ mode });
     playerModeRef.current = mode;
     playerRef.current = nextPlayer;
     playerUnsubscribeRef.current = nextPlayer.subscribe(setSnapshot);
@@ -192,12 +275,15 @@ export function App() {
       return;
     }
 
-    nextPlayer.setSpeed(speed);
-    await nextPlayer.load(loadInput);
     nextPlayer.seek(resumePositionMs);
     if (wasPlaying) {
       await nextPlayer.play();
     }
+  }
+
+  function commitSettings(nextSettings: UserSettings) {
+    settingsRef.current = nextSettings;
+    setSettings(nextSettings);
   }
 
   const isPlayerBusy =

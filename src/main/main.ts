@@ -1,8 +1,14 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "node:path";
+import {
+  registerResourceProtocol,
+  registerResourceProtocolScheme
+} from "./resources/resourceProtocol";
 import { registerSettingsHandlers } from "./settings/settingsService";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
+
+registerResourceProtocolScheme();
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -33,6 +39,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  registerResourceProtocol();
   registerSettingsHandlers();
   createWindow();
 

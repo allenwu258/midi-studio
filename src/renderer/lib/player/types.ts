@@ -32,6 +32,7 @@ export interface MidiPlaybackEngine {
   stop(): void;
   seek(positionMs: number): void;
   setSpeed(percent: number): void;
+  setMasterVolume(percent: number): void;
   dispose(): void;
   getSnapshot(): PlayerSnapshot;
   subscribe(listener: (snapshot: PlayerSnapshot) => void): () => void;
@@ -39,4 +40,5 @@ export interface MidiPlaybackEngine {
 
 export type PlayerFactoryOptions = {
   mode: PlaybackEngineMode;
+  masterVolumePercent?: number;
 };

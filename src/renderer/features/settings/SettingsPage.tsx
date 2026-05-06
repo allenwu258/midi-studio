@@ -78,7 +78,7 @@ export function SettingsPage({
       <section className="settings-section">
         <div className="settings-copy">
           <h3>主音量</h3>
-          <p>后续播放器引擎会读取这个默认音量。</p>
+          <p>控制当前播放器和后续打开曲目的默认音量。</p>
         </div>
         <label className="settings-slider">
           <input
