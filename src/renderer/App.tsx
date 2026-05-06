@@ -22,6 +22,7 @@ export function App() {
   );
   const playerModeRef = useRef(DEFAULT_SETTINGS.playbackEngineMode);
   const playerUnsubscribeRef = useRef<(() => void) | null>(null);
+  const playerDisposeTimeoutRef = useRef<number | null>(null);
   const currentLoadInputRef = useRef<PlayerLoadInput | null>(null);
   const loadGenerationRef = useRef(0);
   const settingsRef = useRef<UserSettings>(DEFAULT_SETTINGS);
@@ -38,6 +39,7 @@ export function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
+    cancelPendingPlayerDispose();
     playerUnsubscribeRef.current = playerRef.current.subscribe(setSnapshot);
     const intervalId = window.setInterval(() => {
       const nextSnapshot = playerRef.current.getSnapshot();
@@ -51,7 +53,7 @@ export function App() {
       playerUnsubscribeRef.current?.();
       playerUnsubscribeRef.current = null;
       window.clearInterval(intervalId);
-      playerRef.current.dispose();
+      schedulePlayerDispose();
     };
   }, []);
 
@@ -286,6 +288,28 @@ export function App() {
   function commitSettings(nextSettings: UserSettings) {
     settingsRef.current = nextSettings;
     setSettings(nextSettings);
+  }
+
+  function cancelPendingPlayerDispose() {
+    if (playerDisposeTimeoutRef.current === null) {
+      return;
+    }
+
+    window.clearTimeout(playerDisposeTimeoutRef.current);
+    playerDisposeTimeoutRef.current = null;
+  }
+
+  function schedulePlayerDispose() {
+    cancelPendingPlayerDispose();
+
+    const playerToDispose = playerRef.current;
+    playerDisposeTimeoutRef.current = window.setTimeout(() => {
+      if (playerRef.current === playerToDispose) {
+        playerToDispose.dispose();
+      }
+
+      playerDisposeTimeoutRef.current = null;
+    }, 0);
   }
 
   const isPlayerBusy =
