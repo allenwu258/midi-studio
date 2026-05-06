@@ -72,9 +72,11 @@ export function App() {
         commitSettings(nextSettings);
         setStorageInfo(nextStorageInfo);
         setSpeed(nextSettings.defaultSpeedPercent);
+        playerRef.current.setSpeed(nextSettings.defaultSpeedPercent);
         playerRef.current.setMasterVolume(nextSettings.masterVolumePercent);
         await switchPlayer(nextSettings.playbackEngineMode, {
-          reloadCurrentSong: false,
+          reloadCurrentSong: Boolean(currentLoadInputRef.current),
+          speedPercent: nextSettings.defaultSpeedPercent,
           settings: nextSettings
         });
       } catch (err) {
@@ -126,10 +128,10 @@ export function App() {
       loadGenerationRef.current = loadGeneration;
       currentLoadInputRef.current = loadInput;
       setSong(parsedSong);
-      loadingPlayer.setSpeed(settings.defaultSpeedPercent);
       loadingPlayer.setMasterVolume(settings.masterVolumePercent);
       setSpeed(settings.defaultSpeedPercent);
       await loadingPlayer.load(loadInput);
+      loadingPlayer.setSpeed(settings.defaultSpeedPercent);
     } catch (err) {
       if (loadGenerationRef.current !== loadGeneration || playerRef.current !== loadingPlayer) {
         return;
@@ -225,7 +227,7 @@ export function App() {
 
   async function switchPlayer(
     mode: UserSettings["playbackEngineMode"],
-    options: { reloadCurrentSong: boolean; settings: UserSettings }
+    options: { reloadCurrentSong: boolean; settings: UserSettings; speedPercent?: number }
   ) {
     if (playerModeRef.current === mode) {
       return;
@@ -234,12 +236,11 @@ export function App() {
     const previousPlayer = playerRef.current;
     const loadInput = currentLoadInputRef.current;
     const expectedLoadInput = loadInput;
+    const targetSpeed = options.speedPercent ?? speed;
     const nextPlayer = createPlayer({
       mode,
       masterVolumePercent: options.settings.masterVolumePercent
     });
-
-    nextPlayer.setSpeed(speed);
 
     try {
       if (options.reloadCurrentSong && loadInput) {
@@ -255,6 +256,7 @@ export function App() {
           throw new Error("播放模式切换已被新的 MIDI 加载取消。");
         }
       }
+      nextPlayer.setSpeed(targetSpeed);
     } catch (err) {
       nextPlayer.dispose();
       setSnapshot(previousPlayer.getSnapshot());

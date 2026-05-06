@@ -180,9 +180,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     });
     synth.soundFontLoadFailed.on((event) => {
       if (!this.disposed && this.synth === synth) {
-        this.clearSoundFontTimeout();
-        this.soundFontError = toError(event, "SF2 音源加载失败。");
-        this.rejectPendingLoad(this.soundFontError);
+        this.failSoundFontLoad(toError(event, "SF2 音源加载失败。"));
       }
     });
     synth.midiLoaded.on((event) => {
@@ -267,10 +265,9 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         return;
       }
 
-      this.soundFontError = new Error(
-        `SF2 音源加载超时，请检查资源路径：${SOUNDFONT_URL}`
+      this.failSoundFontLoad(
+        new Error(`SF2 音源加载超时，请检查资源路径：${SOUNDFONT_URL}`)
       );
-      this.rejectPendingLoad(this.soundFontError);
     }, 15000);
   }
 
@@ -287,6 +284,15 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     this.pendingLoad = null;
   }
 
+  private failSoundFontLoad(error: Error): void {
+    this.clearSoundFontTimeout();
+    this.soundFontError = error;
+    this.soundFontReady = false;
+    this.midiReady = false;
+    this.rejectPendingLoad(error);
+    this.destroySynth();
+  }
+
   private startLoad(): number {
     if (this.pendingLoad) {
       if (this.pendingLoad.midiStarted) {
@@ -297,6 +303,13 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       }
       this.pendingLoad.reject(new Error("MIDI 加载已被新的请求替代。"));
       this.pendingLoad = null;
+    }
+
+    if (this.soundFontError) {
+      this.destroySynth();
+      this.soundFontReady = false;
+      this.soundFontError = null;
+      this.midiReady = false;
     }
 
     this.loadId += 1;
