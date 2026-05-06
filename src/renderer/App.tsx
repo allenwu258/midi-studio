@@ -3,13 +3,23 @@ import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from ".
 import { SettingsPage } from "./features/settings/SettingsPage";
 import { parseMidiFile, type NoteCluster, type ParsedSong } from "./lib/midi";
 import { formatTime } from "./lib/notation";
-import { SynthPlayer, type PlayerSnapshot } from "./lib/synthPlayer";
+import { createPlayer } from "./lib/player/createPlayer";
+import type {
+  MidiPlaybackEngine,
+  PlayerLoadInput,
+  PlayerSnapshot
+} from "./lib/player/types";
 
 type AppView = "player" | "settings";
 
 export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const playerRef = useRef(new SynthPlayer());
+  const playerRef = useRef<MidiPlaybackEngine>(
+    createPlayer({ mode: DEFAULT_SETTINGS.playbackEngineMode })
+  );
+  const playerModeRef = useRef(DEFAULT_SETTINGS.playbackEngineMode);
+  const playerUnsubscribeRef = useRef<(() => void) | null>(null);
+  const currentLoadInputRef = useRef<PlayerLoadInput | null>(null);
   const [song, setSong] = useState<ParsedSong | null>(null);
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
   const [speed, setSpeed] = useState(100);
@@ -21,7 +31,7 @@ export function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
-    const unsubscribe = playerRef.current.subscribe(setSnapshot);
+    playerUnsubscribeRef.current = playerRef.current.subscribe(setSnapshot);
     const intervalId = window.setInterval(() => {
       const nextSnapshot = playerRef.current.getSnapshot();
 
@@ -31,8 +41,10 @@ export function App() {
     }, 33);
 
     return () => {
-      unsubscribe();
+      playerUnsubscribeRef.current?.();
+      playerUnsubscribeRef.current = null;
       window.clearInterval(intervalId);
+      playerRef.current.dispose();
     };
   }, []);
 
@@ -53,6 +65,7 @@ export function App() {
         setSettings(nextSettings);
         setStorageInfo(nextStorageInfo);
         setSpeed(nextSettings.defaultSpeedPercent);
+        await switchPlayer(nextSettings.playbackEngineMode, { reloadCurrentSong: false });
       } catch (err) {
         if (!isMounted) {
           return;
@@ -86,15 +99,24 @@ export function App() {
     try {
       setError("");
       const buffer = await file.arrayBuffer();
+      const midiBytes = buffer.slice(0);
       const parsedSong = parseMidiFile(buffer, file.name);
-      playerRef.current.load(parsedSong.notes, parsedSong.durationMs);
-      playerRef.current.setSpeed(settings.defaultSpeedPercent);
+      const loadInput = {
+        midiBytes,
+        notes: parsedSong.notes,
+        durationMs: parsedSong.durationMs
+      };
+
+      currentLoadInputRef.current = loadInput;
       setSong(parsedSong);
+      playerRef.current.setSpeed(settings.defaultSpeedPercent);
       setSpeed(settings.defaultSpeedPercent);
+      await playerRef.current.load(loadInput);
     } catch (err) {
       setSong(null);
+      currentLoadInputRef.current = null;
       playerRef.current.stop();
-      setError(err instanceof Error ? err.message : "MIDI 解析失败。");
+      setError(err instanceof Error ? err.message : "MIDI 或音频加载失败。");
     } finally {
       event.currentTarget.value = "";
     }
@@ -131,14 +153,56 @@ export function App() {
     try {
       setIsSavingSettings(true);
       setSettingsError("");
+      const previousMode = settings.playbackEngineMode;
       const nextSettings = await window.midiStudio.settings.update(patch);
       setSettings(nextSettings);
+      if (nextSettings.playbackEngineMode !== previousMode) {
+        await switchPlayer(nextSettings.playbackEngineMode, { reloadCurrentSong: true });
+      }
     } catch (err) {
       setSettingsError(err instanceof Error ? err.message : "设置保存失败。");
     } finally {
       setIsSavingSettings(false);
     }
   }
+
+  async function switchPlayer(
+    mode: UserSettings["playbackEngineMode"],
+    options: { reloadCurrentSong: boolean }
+  ) {
+    if (playerModeRef.current === mode) {
+      return;
+    }
+
+    const previousPlayer = playerRef.current;
+    const previousSnapshot = previousPlayer.getSnapshot();
+    const wasPlaying = previousSnapshot.status === "playing";
+    const resumePositionMs = previousSnapshot.positionMs;
+    const loadInput = currentLoadInputRef.current;
+
+    playerUnsubscribeRef.current?.();
+    previousPlayer.dispose();
+
+    const nextPlayer = createPlayer({ mode });
+    playerModeRef.current = mode;
+    playerRef.current = nextPlayer;
+    playerUnsubscribeRef.current = nextPlayer.subscribe(setSnapshot);
+
+    if (!options.reloadCurrentSong || !loadInput) {
+      return;
+    }
+
+    nextPlayer.setSpeed(speed);
+    await nextPlayer.load(loadInput);
+    nextPlayer.seek(resumePositionMs);
+    if (wasPlaying) {
+      await nextPlayer.play();
+    }
+  }
+
+  const isPlayerBusy =
+    snapshot.status === "loading-soundfont" || snapshot.status === "loading-midi";
+  const isPlayerUnavailable = isPlayerBusy || snapshot.status === "error";
 
   return (
     <main className="app-shell">
@@ -206,6 +270,10 @@ export function App() {
                   <dt>播放模式</dt>
                   <dd>{settings.playbackEngineMode === "sf2-synth" ? "SF2 合成" : "纯 MIDI"}</dd>
                 </div>
+                <div>
+                  <dt>播放器状态</dt>
+                  <dd>{formatPlayerStatus(snapshot)}</dd>
+                </div>
               </dl>
               {error ? <p className="error-text">{error}</p> : null}
               {settingsError ? <p className="error-text">{settingsError}</p> : null}
@@ -229,10 +297,20 @@ export function App() {
 
           <footer className="transport">
             <div className="transport-row">
-              <button className="button primary play-button" type="button" onClick={togglePlay}>
+              <button
+                className="button primary play-button"
+                type="button"
+                onClick={togglePlay}
+                disabled={Boolean(song) && isPlayerUnavailable}
+              >
                 {snapshot.status === "playing" ? "暂停" : "播放"}
               </button>
-              <button className="button secondary" type="button" onClick={stopPlayback} disabled={!song}>
+              <button
+                className="button secondary"
+                type="button"
+                onClick={stopPlayback}
+                disabled={!song || isPlayerBusy}
+              >
                 停止
               </button>
               <div className="time-readout">
@@ -248,7 +326,7 @@ export function App() {
                   max="150"
                   step="5"
                   value={speed}
-                  disabled={!song}
+                  disabled={!song || isPlayerUnavailable}
                   onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
                 />
                 <strong>{speed}%</strong>
@@ -262,7 +340,7 @@ export function App() {
                 max={Math.max(1, Math.round(song?.durationMs ?? 1))}
                 step="1"
                 value={Math.round(snapshot.positionMs)}
-                disabled={!song}
+                disabled={!song || isPlayerUnavailable}
                 onChange={(event) => seekTo(Number(event.currentTarget.value))}
                 aria-label="播放进度"
               />
@@ -351,4 +429,25 @@ function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean
     left.durationMs === right.durationMs &&
     Math.round(left.positionMs) === Math.round(right.positionMs)
   );
+}
+
+function formatPlayerStatus(snapshot: PlayerSnapshot): string {
+  switch (snapshot.status) {
+    case "loading-soundfont":
+    case "loading-midi":
+      return snapshot.loadingMessage ?? "加载中";
+    case "ready":
+      return "已就绪";
+    case "playing":
+      return "播放中";
+    case "paused":
+      return "已暂停";
+    case "ended":
+      return "已结束";
+    case "error":
+      return snapshot.error ?? "播放器错误";
+    case "idle":
+    default:
+      return "待机";
+  }
 }

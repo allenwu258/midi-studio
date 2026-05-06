@@ -54,6 +54,8 @@
     ],
     "asar": true,
     "asarUnpack": [
+      "dist/renderer/soundfonts/**/*",
+      "dist/renderer/vendor/alphasynth/**/*",
       "node_modules/sqlite3/**/*"
     ],
     "win": {

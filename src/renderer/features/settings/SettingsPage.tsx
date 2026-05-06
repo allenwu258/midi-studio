@@ -36,7 +36,7 @@ export function SettingsPage({
       <section className="settings-section">
         <div className="settings-copy">
           <h3>播放模式</h3>
-          <p>选择默认 MIDI 播放引擎。SF2 合成会在音源接入后使用本地 SoundFont。</p>
+          <p>选择默认 MIDI 播放引擎。SF2 合成会加载本地 SoundFont，音色更接近真实钢琴。</p>
         </div>
         <div className="segmented-control" aria-label="播放模式">
           <ModeButton

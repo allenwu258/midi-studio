@@ -1,19 +1,12 @@
 import type { MidiNote } from "./midi";
-
-type PlayerStatus = "idle" | "playing" | "paused" | "ended";
-
-export type PlayerSnapshot = {
-  status: PlayerStatus;
-  positionMs: number;
-  durationMs: number;
-};
+import type { MidiPlaybackEngine, PlayerLoadInput, PlayerSnapshot, PlayerStatus } from "./player/types";
 
 type ScheduledVoice = {
   oscillator: OscillatorNode;
   gain: GainNode;
 };
 
-export class SynthPlayer {
+export class SynthPlayer implements MidiPlaybackEngine {
   private audioContext: AudioContext | null = null;
   private notes: MidiNote[] = [];
   private durationMs = 0;
@@ -27,11 +20,11 @@ export class SynthPlayer {
   private scheduledVoices = new Set<ScheduledVoice>();
   private listeners = new Set<(snapshot: PlayerSnapshot) => void>();
 
-  load(notes: MidiNote[], durationMs: number): void {
+  load(input: PlayerLoadInput): void {
     this.stopScheduler();
     this.stopVoices();
-    this.notes = notes;
-    this.durationMs = durationMs;
+    this.notes = input.notes;
+    this.durationMs = input.durationMs;
     this.positionMs = 0;
     this.speed = 1;
     this.status = "idle";
@@ -123,6 +116,13 @@ export class SynthPlayer {
     return () => {
       this.listeners.delete(listener);
     };
+  }
+
+  dispose(): void {
+    this.stop();
+    this.listeners.clear();
+    void this.audioContext?.close();
+    this.audioContext = null;
   }
 
   private getAudioContext(): AudioContext {
