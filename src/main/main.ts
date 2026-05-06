@@ -1,5 +1,6 @@
 import { app, BrowserWindow, shell } from "electron";
 import path from "node:path";
+import { registerSettingsHandlers } from "./settings/settingsService";
 
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
 
@@ -32,6 +33,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  registerSettingsHandlers();
   createWindow();
 
   app.on("activate", () => {

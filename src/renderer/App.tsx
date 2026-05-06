@@ -1,7 +1,11 @@
 import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from "../shared/settings";
+import { SettingsPage } from "./features/settings/SettingsPage";
 import { parseMidiFile, type NoteCluster, type ParsedSong } from "./lib/midi";
 import { formatTime } from "./lib/notation";
 import { SynthPlayer, type PlayerSnapshot } from "./lib/synthPlayer";
+
+type AppView = "player" | "settings";
 
 export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -10,6 +14,11 @@ export function App() {
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
   const [speed, setSpeed] = useState(100);
   const [error, setError] = useState("");
+  const [view, setView] = useState<AppView>("player");
+  const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
+  const [storageInfo, setStorageInfo] = useState<SettingsStorageInfo | null>(null);
+  const [settingsError, setSettingsError] = useState("");
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
 
   useEffect(() => {
     const unsubscribe = playerRef.current.subscribe(setSnapshot);
@@ -24,6 +33,39 @@ export function App() {
     return () => {
       unsubscribe();
       window.clearInterval(intervalId);
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function loadSettings() {
+      try {
+        const [nextSettings, nextStorageInfo] = await Promise.all([
+          window.midiStudio.settings.get(),
+          window.midiStudio.settings.getStorageInfo()
+        ]);
+
+        if (!isMounted) {
+          return;
+        }
+
+        setSettings(nextSettings);
+        setStorageInfo(nextStorageInfo);
+        setSpeed(nextSettings.defaultSpeedPercent);
+      } catch (err) {
+        if (!isMounted) {
+          return;
+        }
+
+        setSettingsError(err instanceof Error ? err.message : "设置读取失败。");
+      }
+    }
+
+    void loadSettings();
+
+    return () => {
+      isMounted = false;
     };
   }, []);
 
@@ -46,8 +88,9 @@ export function App() {
       const buffer = await file.arrayBuffer();
       const parsedSong = parseMidiFile(buffer, file.name);
       playerRef.current.load(parsedSong.notes, parsedSong.durationMs);
+      playerRef.current.setSpeed(settings.defaultSpeedPercent);
       setSong(parsedSong);
-      setSpeed(100);
+      setSpeed(settings.defaultSpeedPercent);
     } catch (err) {
       setSong(null);
       playerRef.current.stop();
@@ -84,6 +127,19 @@ export function App() {
     playerRef.current.setSpeed(value);
   }
 
+  async function updateSettings(patch: Partial<UserSettings>) {
+    try {
+      setIsSavingSettings(true);
+      setSettingsError("");
+      const nextSettings = await window.midiStudio.settings.update(patch);
+      setSettings(nextSettings);
+    } catch (err) {
+      setSettingsError(err instanceof Error ? err.message : "设置保存失败。");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  }
+
   return (
     <main className="app-shell">
       <header className="top-bar">
@@ -92,6 +148,13 @@ export function App() {
           <h1>简谱 MIDI 播放器</h1>
         </div>
         <div className="top-actions">
+          <button
+            className="button secondary"
+            type="button"
+            onClick={() => setView(view === "settings" ? "player" : "settings")}
+          >
+            {view === "settings" ? "播放器" : "设置"}
+          </button>
           <button className="button secondary" type="button" onClick={() => fileInputRef.current?.click()}>
             打开 MIDI
           </button>
@@ -105,91 +168,109 @@ export function App() {
         </div>
       </header>
 
-      <section className="workspace">
-        <aside className="sidebar">
-          <dl className="song-meta">
-            <div>
-              <dt>曲目</dt>
-              <dd>{song?.title ?? "未载入"}</dd>
-            </div>
-            <div>
-              <dt>调性</dt>
-              <dd>{song?.keyName ?? "-"}</dd>
-            </div>
-            <div>
-              <dt>BPM</dt>
-              <dd>{song?.bpm ? Math.round(song.bpm) : "-"}</dd>
-            </div>
-            <div>
-              <dt>轨道</dt>
-              <dd>{song?.trackCount ?? "-"}</dd>
-            </div>
-            <div>
-              <dt>音符</dt>
-              <dd>{song?.noteCount ?? "-"}</dd>
-            </div>
-          </dl>
-          {error ? <p className="error-text">{error}</p> : null}
-        </aside>
+      {view === "settings" ? (
+        <SettingsPage
+          error={settingsError}
+          isSaving={isSavingSettings}
+          settings={settings}
+          storageInfo={storageInfo}
+          onBack={() => setView("player")}
+          onUpdate={updateSettings}
+        />
+      ) : (
+        <>
+          <section className="workspace">
+            <aside className="sidebar">
+              <dl className="song-meta">
+                <div>
+                  <dt>曲目</dt>
+                  <dd>{song?.title ?? "未载入"}</dd>
+                </div>
+                <div>
+                  <dt>调性</dt>
+                  <dd>{song?.keyName ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt>BPM</dt>
+                  <dd>{song?.bpm ? Math.round(song.bpm) : "-"}</dd>
+                </div>
+                <div>
+                  <dt>轨道</dt>
+                  <dd>{song?.trackCount ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt>音符</dt>
+                  <dd>{song?.noteCount ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt>播放模式</dt>
+                  <dd>{settings.playbackEngineMode === "sf2-synth" ? "SF2 合成" : "纯 MIDI"}</dd>
+                </div>
+              </dl>
+              {error ? <p className="error-text">{error}</p> : null}
+              {settingsError ? <p className="error-text">{settingsError}</p> : null}
+            </aside>
 
-        <section className="notation-panel" aria-label="简谱">
-          {song ? (
-            <NumberedNotation
-              activeClusterIndex={clusterPlayback.activeIndex}
-              clusters={song.clusters}
-              pastClusterIndex={clusterPlayback.pastIndex}
-            />
-          ) : (
-            <div className="empty-state">
-              <strong>打开一个 MIDI 文件</strong>
-              <span>支持 .mid 和 .midi</span>
-            </div>
-          )}
+            <section className="notation-panel" aria-label="简谱">
+              {song ? (
+                <NumberedNotation
+                  activeClusterIndex={clusterPlayback.activeIndex}
+                  clusters={song.clusters}
+                  pastClusterIndex={clusterPlayback.pastIndex}
+                />
+              ) : (
+                <div className="empty-state">
+                  <strong>打开一个 MIDI 文件</strong>
+                  <span>支持 .mid 和 .midi</span>
+                </div>
+              )}
+            </section>
         </section>
-      </section>
 
-      <footer className="transport">
-        <div className="transport-row">
-          <button className="button primary play-button" type="button" onClick={togglePlay}>
-            {snapshot.status === "playing" ? "暂停" : "播放"}
-          </button>
-          <button className="button secondary" type="button" onClick={stopPlayback} disabled={!song}>
-            停止
-          </button>
-          <div className="time-readout">
-            <span>{formatTime(snapshot.positionMs)}</span>
-            <span>/</span>
-            <span>{formatTime(song?.durationMs ?? 0)}</span>
-          </div>
-          <label className="speed-control">
-            <span>速度</span>
-            <input
-              type="range"
-              min="50"
-              max="150"
-              step="5"
-              value={speed}
-              disabled={!song}
-              onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
-            />
-            <strong>{speed}%</strong>
-          </label>
-        </div>
-        <div className="progress-wrap">
-          <input
-            className="progress-input"
-            type="range"
-            min="0"
-            max={Math.max(1, Math.round(song?.durationMs ?? 1))}
-            step="1"
-            value={Math.round(snapshot.positionMs)}
-            disabled={!song}
-            onChange={(event) => seekTo(Number(event.currentTarget.value))}
-            aria-label="播放进度"
-          />
-          <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
-        </div>
-      </footer>
+          <footer className="transport">
+            <div className="transport-row">
+              <button className="button primary play-button" type="button" onClick={togglePlay}>
+                {snapshot.status === "playing" ? "暂停" : "播放"}
+              </button>
+              <button className="button secondary" type="button" onClick={stopPlayback} disabled={!song}>
+                停止
+              </button>
+              <div className="time-readout">
+                <span>{formatTime(snapshot.positionMs)}</span>
+                <span>/</span>
+                <span>{formatTime(song?.durationMs ?? 0)}</span>
+              </div>
+              <label className="speed-control">
+                <span>速度</span>
+                <input
+                  type="range"
+                  min="50"
+                  max="150"
+                  step="5"
+                  value={speed}
+                  disabled={!song}
+                  onChange={(event) => changeSpeed(Number(event.currentTarget.value))}
+                />
+                <strong>{speed}%</strong>
+              </label>
+            </div>
+            <div className="progress-wrap">
+              <input
+                className="progress-input"
+                type="range"
+                min="0"
+                max={Math.max(1, Math.round(song?.durationMs ?? 1))}
+                step="1"
+                value={Math.round(snapshot.positionMs)}
+                disabled={!song}
+                onChange={(event) => seekTo(Number(event.currentTarget.value))}
+                aria-label="播放进度"
+              />
+              <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
+            </div>
+          </footer>
+        </>
+      )}
     </main>
   );
 }
