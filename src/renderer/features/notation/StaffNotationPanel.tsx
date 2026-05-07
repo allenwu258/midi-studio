@@ -332,13 +332,20 @@ function ScoreEventSvg({
     <g className={className} data-score-element-id={event.id}>
       {renderEvent.notes.map((note) => (
         <g key={`${event.id}-${note.note.sourceNoteId}`}>
-          <LedgerLines x={x} lines={note.ledgerLines} />
+          <LedgerLines x={note.noteHeadX} lines={note.ledgerLines} />
           {note.note.alter ? (
             <text className="accidental" x={note.accidentalX} y={note.y + 4}>
               {accidentalText(note.note.alter)}
             </text>
           ) : null}
-          <ellipse className="note-head" cx={x} cy={note.y} rx="8.5" ry="6" transform={`rotate(-18 ${x} ${note.y})`} />
+          <ellipse
+            className="note-head"
+            cx={note.noteHeadX}
+            cy={note.y}
+            rx="8.5"
+            ry="6"
+            transform={`rotate(-18 ${note.noteHeadX} ${note.y})`}
+          />
         </g>
       ))}
       {event.durationName !== "whole" && !renderEvent.beamed ? (

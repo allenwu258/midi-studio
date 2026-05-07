@@ -1,16 +1,22 @@
-import type { RenderEvent, RenderStaff } from "./types";
+import type { RenderBox, RenderEvent, RenderGlyphBox, RenderStaff } from "./types";
 
 const MIN_EVENT_GAP = 4;
-const MAX_SHIFT = 20;
+const MAX_SHIFT = 28;
 
 export function avoidStaffCollisions(staff: RenderStaff): RenderStaff {
-  const events = staff.events.map((event) => ({ ...event, notes: event.notes.map((note) => ({ ...note })) }));
+  const events = staff.events.map((event) => ({
+    ...event,
+    notes: event.notes.map((note) => ({ ...note })),
+    glyphBoxes: event.glyphBoxes.map((box) => ({ ...box }))
+  }));
   const grouped = groupEventsByMeasure(events);
 
   for (const measureEvents of grouped.values()) {
-    avoidEventBoxes(measureEvents);
-    spreadAccidentals(measureEvents);
     separateVisibleRests(measureEvents);
+    spreadAccidentals(measureEvents);
+    syncEventBoxes(measureEvents);
+    avoidLayeredGlyphCollisions(measureEvents);
+    syncEventBoxes(measureEvents);
   }
 
   return {
@@ -27,22 +33,6 @@ function groupEventsByMeasure(events: RenderEvent[]): Map<number, RenderEvent[]>
   }
 
   return grouped;
-}
-
-function avoidEventBoxes(events: RenderEvent[]) {
-  const sorted = events
-    .filter((event) => event.event.kind === "chord")
-    .sort((a, b) => a.x - b.x || a.event.voiceIndex - b.event.voiceIndex);
-
-  for (let index = 1; index < sorted.length; index += 1) {
-    const previous = sorted[index - 1];
-    const current = sorted[index];
-    const overlap = previous.box.x + previous.box.width + MIN_EVENT_GAP - current.box.x;
-
-    if (overlap > 0 && current.event.startTicks >= previous.event.startTicks) {
-      shiftEvent(current, Math.min(MAX_SHIFT, overlap));
-    }
-  }
 }
 
 function spreadAccidentals(events: RenderEvent[]) {
@@ -76,15 +66,141 @@ function separateVisibleRests(events: RenderEvent[]) {
 
     if (event.event.voiceIndex === 1) {
       event.restY += 16;
-      event.box.y += 16;
     }
   }
+}
+
+function avoidLayeredGlyphCollisions(events: RenderEvent[]) {
+  const sorted = [...events].sort(
+    (a, b) => a.x - b.x || a.event.startTicks - b.event.startTicks || a.event.voiceIndex - b.event.voiceIndex
+  );
+  const settled: RenderEvent[] = [];
+
+  for (const current of sorted) {
+    let shifted = 0;
+
+    for (let pass = 0; pass < 3; pass += 1) {
+      const requiredShift = Math.max(0, ...settled.map((previous) => collisionShift(previous, current)));
+      const allowedShift = Math.min(MAX_SHIFT - shifted, requiredShift);
+
+      if (allowedShift <= 0) {
+        break;
+      }
+
+      shiftEvent(current, allowedShift);
+      shifted += allowedShift;
+      syncEventBox(current);
+
+      if (shifted >= MAX_SHIFT) {
+        break;
+      }
+    }
+
+    settled.push(current);
+  }
+}
+
+function collisionShift(previous: RenderEvent, current: RenderEvent): number {
+  if (current.event.startTicks <= previous.event.startTicks) {
+    return 0;
+  }
+
+  let shift = 0;
+  for (const previousBox of previous.glyphBoxes) {
+    for (const currentBox of current.glyphBoxes) {
+      if (!shouldAvoidCollision(previousBox, currentBox) || !boxesOverlapY(previousBox, currentBox)) {
+        continue;
+      }
+
+      const overlap = previousBox.x + previousBox.width + MIN_EVENT_GAP - currentBox.x;
+      if (overlap > 0) {
+        shift = Math.max(shift, overlap);
+      }
+    }
+  }
+
+  return shift;
+}
+
+function shouldAvoidCollision(previous: RenderGlyphBox, current: RenderGlyphBox): boolean {
+  if (previous.layer === "tie" && current.layer === "tie") {
+    return false;
+  }
+
+  if (previous.layer === "accidental" && current.layer === "accidental") {
+    return false;
+  }
+
+  return true;
 }
 
 function shiftEvent(event: RenderEvent, amount: number) {
   event.x += amount;
   event.box.x += amount;
   for (const note of event.notes) {
+    note.noteHeadX += amount;
     note.accidentalX += amount;
   }
+  for (const box of event.glyphBoxes) {
+    box.x += amount;
+  }
+}
+
+function syncEventBoxes(events: RenderEvent[]) {
+  for (const event of events) {
+    syncEventBox(event);
+  }
+}
+
+function syncEventBox(event: RenderEvent) {
+  event.glyphBoxes = event.event.kind === "rest" ? restBoxes(event) : chordBoxes(event);
+  event.box = unionBoxes(event.glyphBoxes);
+}
+
+function restBoxes(event: RenderEvent): RenderGlyphBox[] {
+  const boxes: RenderGlyphBox[] = [
+    { layer: "rest", x: event.x - 8, y: event.restY - 18, width: 18, height: 22 }
+  ];
+
+  for (let index = 0; index < event.event.dots; index += 1) {
+    boxes.push({ layer: "rest", x: event.x + 12 + index * 7, y: event.restY - 11, width: 5, height: 5 });
+  }
+
+  return boxes;
+}
+
+function chordBoxes(event: RenderEvent): RenderGlyphBox[] {
+  const boxes: RenderGlyphBox[] = [];
+  const highestY = Math.min(...event.notes.map((note) => note.y));
+  const lowestY = Math.max(...event.notes.map((note) => note.y));
+
+  for (const note of event.notes) {
+    boxes.push({ layer: "notehead", x: note.noteHeadX - 9, y: note.y - 7, width: 18, height: 14 });
+    if (note.note.alter !== 0) {
+      boxes.push({ layer: "accidental", x: note.accidentalX - 7, y: note.y - 13, width: 14, height: 18 });
+    }
+  }
+
+  for (let index = 0; index < event.event.dots; index += 1) {
+    boxes.push({ layer: "notehead", x: event.x + 14 + index * 7, y: highestY - 3, width: 5, height: 5 });
+  }
+
+  if (event.event.kind === "chord" && event.event.tieStart) {
+    boxes.push({ layer: "tie", x: event.x - 5, y: lowestY + 10, width: 105, height: 24 });
+  }
+
+  return boxes;
+}
+
+function unionBoxes(boxes: RenderGlyphBox[]): RenderBox {
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+
+  return { x: left, y: top, width: right - left, height: bottom - top };
+}
+
+function boxesOverlapY(a: RenderBox, b: RenderBox): boolean {
+  return a.y < b.y + b.height && b.y < a.y + a.height;
 }

@@ -6,6 +6,7 @@ import { createSystemMeasureLayouts, partHeight, xForEvent } from "./spacing";
 import type {
   RenderBox,
   RenderEvent,
+  RenderGlyphBox,
   RenderLayoutOptions,
   RenderMeasure,
   RenderNote,
@@ -222,11 +223,13 @@ function createRenderEvent(
 
   if (event.kind === "rest") {
     const restY = staffTop + options.lineGap * 2.8;
+    const glyphBoxes = restGlyphBoxes(x, restY, event.dots);
     return {
       event,
       measure,
       x,
-      box: { x: x - 8, y: restY - 18, width: 18, height: 22 },
+      box: unionBoxes(glyphBoxes),
+      glyphBoxes,
       beamed: false,
       notes: [],
       restY
@@ -240,16 +243,15 @@ function createRenderEvent(
   const highestY = Math.min(...notes.map((note) => note.y));
   const lowestY = Math.max(...notes.map((note) => note.y));
   const stemDirection = stemDirectionForChord(event, staff, staffTop, highestY, lowestY, options.lineGap);
-  const accidentalLeft = Math.min(x - 32, ...notes.filter((note) => note.note.alter !== 0).map((note) => note.accidentalX - 7));
-  const boxLeft = Number.isFinite(accidentalLeft) ? accidentalLeft : x - 14;
-  const boxTop = Math.min(highestY - 8, stemDirection === "up" ? highestY - options.stemLength : highestY - 8);
-  const boxBottom = Math.max(lowestY + 8, stemDirection === "down" ? lowestY + options.stemLength : lowestY + 8);
+  applySecondChordOffsets(notes, x, stemDirection, options.lineGap);
+  const glyphBoxes = chordGlyphBoxes(event, notes, x, stemDirection, options);
 
   return {
     event,
     measure,
     x,
-    box: { x: boxLeft, y: boxTop, width: x + 20 - boxLeft, height: boxBottom - boxTop },
+    box: unionBoxes(glyphBoxes),
+    glyphBoxes,
     stemDirection,
     beamed: false,
     notes,
@@ -268,9 +270,94 @@ function createRenderNote(
   return {
     note,
     y,
+    noteHeadX: 0,
     accidentalX: 0,
     ledgerLines: ledgerLinesForY(y, staffTop, options)
   };
+}
+
+function applySecondChordOffsets(
+  notes: RenderNote[],
+  x: number,
+  stemDirection: "up" | "down",
+  lineGap: number
+) {
+  for (const note of notes) {
+    note.noteHeadX = x;
+  }
+
+  const sorted = [...notes].sort((a, b) => b.y - a.y);
+  const offset = stemDirection === "up" ? -10 : 10;
+  let alternate = false;
+
+  for (let index = 1; index < sorted.length; index += 1) {
+    const close = Math.abs(sorted[index].y - sorted[index - 1].y) <= lineGap / 2 + 0.5;
+    if (!close) {
+      alternate = false;
+      continue;
+    }
+
+    alternate = !alternate;
+    sorted[index].noteHeadX = x + (alternate ? offset : 0);
+  }
+}
+
+function restGlyphBoxes(x: number, restY: number, dots: number): RenderGlyphBox[] {
+  const boxes: RenderGlyphBox[] = [
+    { layer: "rest", x: x - 8, y: restY - 18, width: 18, height: 22 }
+  ];
+
+  for (let index = 0; index < dots; index += 1) {
+    boxes.push({ layer: "rest", x: x + 12 + index * 7, y: restY - 11, width: 5, height: 5 });
+  }
+
+  return boxes;
+}
+
+function chordGlyphBoxes(
+  event: ScoreChord,
+  notes: RenderNote[],
+  x: number,
+  stemDirection: "up" | "down",
+  options: RenderLayoutOptions
+): RenderGlyphBox[] {
+  const boxes: RenderGlyphBox[] = [];
+  const highestY = Math.min(...notes.map((note) => note.y));
+  const lowestY = Math.max(...notes.map((note) => note.y));
+
+  for (const note of notes) {
+    boxes.push({ layer: "notehead", x: note.noteHeadX - 9, y: note.y - 7, width: 18, height: 14 });
+    if (note.note.alter !== 0) {
+      boxes.push({ layer: "accidental", x: note.accidentalX - 7, y: note.y - 13, width: 14, height: 18 });
+    }
+  }
+
+  for (let index = 0; index < event.dots; index += 1) {
+    boxes.push({ layer: "notehead", x: x + 14 + index * 7, y: highestY - 3, width: 5, height: 5 });
+  }
+
+  if (event.tieStart) {
+    boxes.push({ layer: "tie", x: x - 5, y: lowestY + 10, width: 105, height: 24 });
+  }
+
+  boxes.push({
+    layer: "notehead",
+    x: stemDirection === "up" ? x + 6 : x - 8,
+    y: stemDirection === "up" ? highestY - options.stemLength : lowestY,
+    width: 3,
+    height: options.stemLength
+  });
+
+  return boxes;
+}
+
+function unionBoxes(boxes: RenderGlyphBox[]): RenderBox {
+  const left = Math.min(...boxes.map((box) => box.x));
+  const top = Math.min(...boxes.map((box) => box.y));
+  const right = Math.max(...boxes.map((box) => box.x + box.width));
+  const bottom = Math.max(...boxes.map((box) => box.y + box.height));
+
+  return { x: left, y: top, width: right - left, height: bottom - top };
 }
 
 function ledgerLinesForY(y: number, staffTop: number, options: RenderLayoutOptions): number[] {

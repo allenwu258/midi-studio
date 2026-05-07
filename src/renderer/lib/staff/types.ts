@@ -9,6 +9,12 @@ export type RenderBox = {
   height: number;
 };
 
+export type RenderGlyphLayer = "accidental" | "notehead" | "rest" | "tie";
+
+export type RenderGlyphBox = RenderBox & {
+  layer: RenderGlyphLayer;
+};
+
 export type RenderScore = {
   score: ScoreDraft;
   width: number;
@@ -31,6 +37,22 @@ export type RenderMeasure = {
   x: number;
   width: number;
   offset: number;
+  spacing: RenderMeasureSpacing;
+};
+
+export type RenderMeasureSpacing = {
+  leading: number;
+  drawableWidth: number;
+  minWidth: number;
+  slices: RenderTimeSlice[];
+};
+
+export type RenderTimeSlice = {
+  ticks: number;
+  x: number;
+  minLeft: number;
+  minRight: number;
+  stretchWeight: number;
 };
 
 export type RenderPart = {
@@ -55,6 +77,7 @@ export type RenderEvent = {
   measure: RenderMeasure;
   x: number;
   box: RenderBox;
+  glyphBoxes: RenderGlyphBox[];
   stemDirection?: StemDirection;
   beamed: boolean;
   notes: RenderNote[];
@@ -64,6 +87,7 @@ export type RenderEvent = {
 export type RenderNote = {
   note: ScoreNote;
   y: number;
+  noteHeadX: number;
   accidentalX: number;
   ledgerLines: number[];
 };
