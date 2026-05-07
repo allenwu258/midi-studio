@@ -1,8 +1,8 @@
-import type { ScoreChord, ScoreDraft, ScoreEvent, ScoreStaff } from "../score";
+import type { ScoreChord, ScoreDraft, ScoreEvent, ScoreMeasure, ScoreStaff } from "../score";
 import { staffYForPitch } from "../score/pitchSpelling";
 import { createBeamGroups, stemDirectionForChord } from "./beams";
 import { avoidStaffCollisions } from "./collisions";
-import { createSystemMeasureLayouts, partHeight, xForEvent } from "./spacing";
+import { createSystemMeasureLayouts, estimateSystemMeasureMinWidth, partHeight, systemWidth, xForEvent } from "./spacing";
 import type {
   RenderBox,
   RenderEvent,
@@ -59,8 +59,7 @@ function createSystems(score: ScoreDraft, options: RenderLayoutOptions): RenderS
       options.systemBottomPadding
   );
 
-  for (let index = 0; index < score.measures.length; index += options.measuresPerSystem) {
-    const measures = score.measures.slice(index, index + options.measuresPerSystem);
+  for (const measures of createSystemMeasureGroups(score, options)) {
     const renderMeasures = createSystemMeasureLayouts(score, measures, options);
     const y = options.pagePadding + systems.length * (systemHeight + options.systemGap);
     const parts = createRenderParts(score, renderMeasures, y, options);
@@ -76,6 +75,36 @@ function createSystems(score: ScoreDraft, options: RenderLayoutOptions): RenderS
   }
 
   return systems;
+}
+
+function createSystemMeasureGroups(score: ScoreDraft, options: RenderLayoutOptions): ScoreMeasure[][] {
+  const groups: ScoreMeasure[][] = [];
+  const maxSystemWidth = systemWidth(options);
+  let index = 0;
+
+  while (index < score.measures.length) {
+    const current: ScoreMeasure[] = [];
+
+    while (index < score.measures.length && current.length < options.measuresPerSystem) {
+      const candidate = [...current, score.measures[index]];
+      const candidateMinWidth = estimateSystemMeasureMinWidth(score, candidate, options);
+
+      if (current.length > 0 && candidateMinWidth > maxSystemWidth) {
+        break;
+      }
+
+      current.push(score.measures[index]);
+      index += 1;
+
+      if (candidateMinWidth > maxSystemWidth) {
+        break;
+      }
+    }
+
+    groups.push(current.length ? current : [score.measures[index++]]);
+  }
+
+  return groups;
 }
 
 function createRenderParts(

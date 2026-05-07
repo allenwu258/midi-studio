@@ -30,16 +30,30 @@ export function createSystemMeasureLayouts(
   const totalWeight = weights.reduce((sum, weight) => sum + weight, 0) || 1;
   const minWidths = spacingPlans.map((spacing) => Math.max(options.minMeasureWidth, spacing.minWidth));
   const minTotal = minWidths.reduce((sum, width) => sum + width, 0);
-  const extraWidth = Math.max(0, systemWidth(options) - minTotal);
+  const targetSystemWidth = systemWidth(options);
+  const compressionScale = minTotal > targetSystemWidth ? targetSystemWidth / Math.max(1, minTotal) : 1;
+  const extraWidth = Math.max(0, targetSystemWidth - minTotal);
   let x = options.scoreLeft;
 
   return measures.map((measure, offset) => {
-    const width = minWidths[offset] + (extraWidth * weights[offset]) / totalWeight;
+    const width = compressionScale < 1
+      ? minWidths[offset] * compressionScale
+      : minWidths[offset] + (extraWidth * weights[offset]) / totalWeight;
     const spacing = scaleMeasureSpacing(spacingPlans[offset], width, options.measureEndPadding);
     const layout = { measure, x, width, offset, spacing };
     x += width;
     return layout;
   });
+}
+
+export function estimateSystemMeasureMinWidth(
+  score: ScoreDraft,
+  measures: ScoreMeasure[],
+  options: RenderLayoutOptions
+): number {
+  return measures.reduce((sum, measure, offset) => (
+    sum + Math.max(options.minMeasureWidth, createMeasureSpacing(score, measure, offset, options).minWidth)
+  ), 0);
 }
 
 export function xForEvent(event: ScoreEvent, measureLayout: RenderMeasure, options: RenderLayoutOptions): number {
@@ -83,7 +97,15 @@ function scaleMeasureSpacing(
   measureWidth: number,
   endPadding: number
 ): RenderMeasureSpacing {
-  const drawableWidth = Math.max(spacing.drawableWidth, measureWidth - spacing.leading - endPadding);
+  const drawableWidth = Math.max(44, measureWidth - spacing.leading - endPadding);
+  if (drawableWidth < spacing.drawableWidth) {
+    return {
+      ...spacing,
+      drawableWidth,
+      slices: compressSlices(spacing.slices, drawableWidth)
+    };
+  }
+
   const extra = Math.max(0, drawableWidth - spacing.drawableWidth);
   const totalStretch = spacing.slices.reduce((sum, slice, index) => (
     index === 0 ? sum : sum + slice.stretchWeight
@@ -105,6 +127,27 @@ function scaleMeasureSpacing(
     drawableWidth,
     slices: scaledSlices
   };
+}
+
+function compressSlices(slices: RenderTimeSlice[], drawableWidth: number): RenderTimeSlice[] {
+  if (slices.length <= 1) {
+    return slices.map((slice) => ({
+      ...slice,
+      x: Math.min(slice.x, Math.max(0, drawableWidth - slice.minRight))
+    }));
+  }
+
+  const first = slices[0];
+  const last = slices[slices.length - 1];
+  const firstX = first.minLeft;
+  const sourceSpan = Math.max(1, last.x - firstX);
+  const targetSpan = Math.max(1, drawableWidth - first.minLeft - last.minRight);
+  const scale = Math.min(1, targetSpan / sourceSpan);
+
+  return slices.map((slice) => ({
+    ...slice,
+    x: firstX + (slice.x - firstX) * scale
+  }));
 }
 
 function createSliceProfiles(score: ScoreDraft, measure: ScoreMeasure): SliceProfile[] {
@@ -195,11 +238,11 @@ function eventGlyphProfile(event: ScoreEvent): Omit<SliceProfile, "ticks"> {
   const accidentalCount = event.notes.filter((note) => note.alter !== 0).length;
   const closeIntervals = countCloseChordIntervals(event);
   const dotWidth = event.dots * 7;
-  const tieWidth = event.tieStart ? 12 : 0;
+  const tieWidth = event.tieStart ? 105 : 0;
   const beamWeight = beamCount(event.durationName) > 0 ? 1.18 : 1;
 
   return {
-    minLeft: 14 + accidentalCount * 9,
+    minLeft: 14 + accidentalCount * 9 + closeIntervals * 5,
     minRight: 18 + dotWidth + tieWidth + closeIntervals * 5,
     rhythmicWeight: beamWeight
   };

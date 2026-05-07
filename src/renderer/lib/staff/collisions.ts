@@ -81,7 +81,7 @@ function avoidLayeredGlyphCollisions(events: RenderEvent[]) {
 
     for (let pass = 0; pass < 3; pass += 1) {
       const requiredShift = Math.max(0, ...settled.map((previous) => collisionShift(previous, current)));
-      const allowedShift = Math.min(MAX_SHIFT - shifted, requiredShift);
+      const allowedShift = Math.min(MAX_SHIFT - shifted, requiredShift, availableRightShift(current));
 
       if (allowedShift <= 0) {
         break;
@@ -98,6 +98,12 @@ function avoidLayeredGlyphCollisions(events: RenderEvent[]) {
 
     settled.push(current);
   }
+}
+
+function availableRightShift(event: RenderEvent): number {
+  const right = Math.max(...event.glyphBoxes.map((box) => box.x + box.width));
+  const measureRight = event.measure.x + event.measure.width - 2;
+  return Math.max(0, measureRight - right);
 }
 
 function collisionShift(previous: RenderEvent, current: RenderEvent): number {
