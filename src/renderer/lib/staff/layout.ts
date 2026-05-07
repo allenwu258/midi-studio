@@ -12,7 +12,8 @@ import type {
   RenderPart,
   RenderScore,
   RenderStaff,
-  RenderSystem
+  RenderSystem,
+  RenderTuplet
 } from "./types";
 import { DEFAULT_RENDER_LAYOUT_OPTIONS } from "./types";
 
@@ -121,7 +122,8 @@ function createRenderStaff(
     staff,
     staffTop,
     events,
-    beams: []
+    beams: [],
+    tuplets: []
   });
   const beams = measures.flatMap((measure) =>
     createBeamGroups(
@@ -141,8 +143,54 @@ function createRenderStaff(
       ...event,
       beamed: beamedIds.has(event.event.id)
     })),
-    beams
+    beams,
+    tuplets: createRenderTuplets(score, partId, staff.index, staffWithCollision.events, staffTop)
   };
+}
+
+function createRenderTuplets(
+  score: ScoreDraft,
+  partId: string,
+  staffIndex: number,
+  events: RenderEvent[],
+  staffTop: number
+): RenderTuplet[] {
+  const result: RenderTuplet[] = [];
+  const eventsByTuplet = new Map<string, RenderEvent[]>();
+
+  for (const event of events) {
+    if (event.event.kind === "chord" && event.event.tupletId) {
+      eventsByTuplet.set(event.event.tupletId, [...(eventsByTuplet.get(event.event.tupletId) ?? []), event]);
+    }
+  }
+
+  for (const tuplet of score.tuplets.filter((item) => item.partId === partId && item.staffIndex === staffIndex)) {
+    const tupletEvents = (eventsByTuplet.get(tuplet.id) ?? []).sort((a, b) => a.x - b.x);
+    if (tupletEvents.length < 2) {
+      continue;
+    }
+
+    const direction = tupletEvents.some((event) => event.stemDirection === "down") ? "down" : "up";
+    const yValues = tupletEvents.flatMap((event) => event.notes.map((note) => note.y));
+    const x1 = tupletEvents[0].x - 10;
+    const x2 = tupletEvents[tupletEvents.length - 1].x + 10;
+    const y = direction === "up"
+      ? Math.min(...yValues, staffTop) - 54
+      : Math.max(...yValues, staffTop + 40) + 54;
+
+    result.push({
+      id: tuplet.id,
+      eventIds: tupletEvents.map((event) => event.event.id),
+      label: String(tuplet.actualNotes),
+      x1,
+      x2,
+      y,
+      bracketY: y + (direction === "up" ? 7 : -7),
+      direction
+    });
+  }
+
+  return result;
 }
 
 function createRenderEvents(

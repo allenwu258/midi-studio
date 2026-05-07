@@ -1,6 +1,6 @@
 {
-  "id": "fixture-basic-grand-staff",
-  "title": "Basic Grand Staff Fixture",
+  "id": "fixture-triplet",
+  "title": "Triplet Fixture",
   "ppq": 480,
   "durationMs": 2000,
   "durationTicks": 1920,
@@ -37,22 +37,93 @@
               "measureIndex": 0,
               "kind": "chord",
               "startTicks": 0,
-              "endTicks": 480,
+              "endTicks": 160,
               "startMs": 0,
-              "endMs": 500,
-              "durationName": "quarter",
+              "endMs": 166.7,
+              "durationName": "eighth",
               "dots": 0,
+              "tupletId": "part-0-tuplet-0-0-s0-v0",
+              "timeModification": {
+                "actualNotes": 3,
+                "normalNotes": 2
+              },
               "notes": [
                 {
                   "midi": 60,
                   "step": "C",
                   "alter": 0,
                   "octave": 4,
-                  "sourceNoteId": "n0",
+                  "sourceNoteId": "t0",
                   "velocity": 0.8
                 }
               ],
-              "sourceNoteIds": ["n0"],
+              "sourceNoteIds": ["t0"],
+              "tieStart": false,
+              "tieStop": false
+            },
+            {
+              "id": "part-0-chord-1-m0-160",
+              "baseId": "part-0-chord-1",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "chord",
+              "startTicks": 160,
+              "endTicks": 320,
+              "startMs": 166.7,
+              "endMs": 333.3,
+              "durationName": "eighth",
+              "dots": 0,
+              "tupletId": "part-0-tuplet-0-0-s0-v0",
+              "timeModification": {
+                "actualNotes": 3,
+                "normalNotes": 2
+              },
+              "notes": [
+                {
+                  "midi": 62,
+                  "step": "D",
+                  "alter": 0,
+                  "octave": 4,
+                  "sourceNoteId": "t1",
+                  "velocity": 0.8
+                }
+              ],
+              "sourceNoteIds": ["t1"],
+              "tieStart": false,
+              "tieStop": false
+            },
+            {
+              "id": "part-0-chord-2-m0-320",
+              "baseId": "part-0-chord-2",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "chord",
+              "startTicks": 320,
+              "endTicks": 480,
+              "startMs": 333.3,
+              "endMs": 500,
+              "durationName": "eighth",
+              "dots": 0,
+              "tupletId": "part-0-tuplet-0-0-s0-v0",
+              "timeModification": {
+                "actualNotes": 3,
+                "normalNotes": 2
+              },
+              "notes": [
+                {
+                  "midi": 64,
+                  "step": "E",
+                  "alter": 0,
+                  "octave": 4,
+                  "sourceNoteId": "t2",
+                  "velocity": 0.8
+                }
+              ],
+              "sourceNoteIds": ["t2"],
               "tieStart": false,
               "tieStop": false
             },
@@ -72,88 +143,10 @@
               "dots": 0
             },
             {
-              "id": "part-0-chord-1-m0-960",
-              "baseId": "part-0-chord-1",
+              "id": "part-0-rest-0-0-960-0",
+              "baseId": "part-0-rest-0-0-960",
               "partId": "part-0",
               "staffIndex": 0,
-              "voiceIndex": 0,
-              "measureIndex": 0,
-              "kind": "chord",
-              "startTicks": 960,
-              "endTicks": 1440,
-              "startMs": 1000,
-              "endMs": 1500,
-              "durationName": "quarter",
-              "dots": 0,
-              "notes": [
-                {
-                  "midi": 64,
-                  "step": "E",
-                  "alter": 0,
-                  "octave": 4,
-                  "sourceNoteId": "n1",
-                  "velocity": 0.8
-                }
-              ],
-              "sourceNoteIds": ["n1"],
-              "tieStart": false,
-              "tieStop": false
-            },
-            {
-              "id": "part-0-rest-0-0-1440-0",
-              "baseId": "part-0-rest-0-0-1440",
-              "partId": "part-0",
-              "staffIndex": 0,
-              "voiceIndex": 0,
-              "measureIndex": 0,
-              "kind": "rest",
-              "startTicks": 1440,
-              "endTicks": 1920,
-              "startMs": 0,
-              "endMs": 0,
-              "durationName": "quarter",
-              "dots": 0
-            }
-          ]
-        },
-        {
-          "index": 1,
-          "clef": "bass",
-          "voiceCount": 1,
-          "events": [
-            {
-              "id": "part-0-chord-2-m0-0",
-              "baseId": "part-0-chord-2",
-              "partId": "part-0",
-              "staffIndex": 1,
-              "voiceIndex": 0,
-              "measureIndex": 0,
-              "kind": "chord",
-              "startTicks": 0,
-              "endTicks": 960,
-              "startMs": 0,
-              "endMs": 1000,
-              "durationName": "half",
-              "dots": 0,
-              "notes": [
-                {
-                  "midi": 48,
-                  "step": "C",
-                  "alter": 0,
-                  "octave": 3,
-                  "sourceNoteId": "n2",
-                  "velocity": 0.8
-                }
-              ],
-              "sourceNoteIds": ["n2"],
-              "tieStart": false,
-              "tieStop": false
-            },
-            {
-              "id": "part-0-rest-1-0-960-0",
-              "baseId": "part-0-rest-1-0-960",
-              "partId": "part-0",
-              "staffIndex": 1,
               "voiceIndex": 0,
               "measureIndex": 0,
               "kind": "rest",
@@ -169,6 +162,20 @@
       ]
     }
   ],
-  "tuplets": [],
+  "tuplets": [
+    {
+      "id": "part-0-tuplet-0-0-s0-v0",
+      "baseId": "part-0-tuplet-0-0",
+      "partId": "part-0",
+      "sourceTrackIndex": 0,
+      "staffIndex": 0,
+      "voiceIndex": 0,
+      "measureIndex": 0,
+      "startTicks": 0,
+      "endTicks": 480,
+      "actualNotes": 3,
+      "normalNotes": 2
+    }
+  ],
   "diagnostics": []
 }

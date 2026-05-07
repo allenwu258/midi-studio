@@ -11,7 +11,8 @@ import {
   type RenderPart,
   type RenderScore,
   type RenderStaff,
-  type RenderSystem
+  type RenderSystem,
+  type RenderTuplet
 } from "../../lib/staff";
 import {
   buildPlaybackMap,
@@ -196,6 +197,13 @@ function StaffSvg({
           beam={beam}
         />
       ))}
+      {staff.tuplets.map((tuplet) => (
+        <TupletSvg
+          key={tuplet.id}
+          active={tuplet.eventIds.some((id) => activeIds.has(id))}
+          tuplet={tuplet}
+        />
+      ))}
       <title>{renderScore.score.title}</title>
     </g>
   );
@@ -378,6 +386,20 @@ function BeamGroupSvg({ beam, active }: { beam: RenderBeamGroup; active: boolean
           points={beam.points}
         />
       ))}
+    </g>
+  );
+}
+
+function TupletSvg({ tuplet, active }: { tuplet: RenderTuplet; active: boolean }) {
+  const hook = tuplet.direction === "up" ? 6 : -6;
+  return (
+    <g className={`tuplet-mark${active ? " active" : ""}`}>
+      <path
+        d={`M ${tuplet.x1} ${tuplet.bracketY + hook} L ${tuplet.x1} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY + hook}`}
+      />
+      <text x={(tuplet.x1 + tuplet.x2) / 2} y={tuplet.y}>
+        {tuplet.label}
+      </text>
     </g>
   );
 }

@@ -47,6 +47,7 @@ export type RenderStaff = {
   staffTop: number;
   events: RenderEvent[];
   beams: RenderBeamGroup[];
+  tuplets: RenderTuplet[];
 };
 
 export type RenderEvent = {
@@ -81,6 +82,17 @@ export type RenderBeamPoint = {
   stemX: number;
   baseY: number;
   beamY: number;
+};
+
+export type RenderTuplet = {
+  id: string;
+  eventIds: string[];
+  label: string;
+  x1: number;
+  x2: number;
+  y: number;
+  bracketY: number;
+  direction: StemDirection;
 };
 
 export type RenderLayoutOptions = {

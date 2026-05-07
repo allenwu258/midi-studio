@@ -10,5 +10,7 @@ export type {
   ScoreNote,
   ScorePart,
   ScoreRest,
-  ScoreStaff
+  ScoreStaff,
+  ScoreTimeModification,
+  ScoreTuplet
 } from "./types";

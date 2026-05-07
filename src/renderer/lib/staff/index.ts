@@ -12,5 +12,6 @@ export type {
   RenderScore,
   RenderStaff,
   RenderSystem,
+  RenderTuplet,
   StemDirection
 } from "./types";

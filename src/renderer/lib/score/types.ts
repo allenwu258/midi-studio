@@ -46,6 +46,8 @@ export type ScoreEventBase = {
   endMs: number;
   durationName: ScoreDurationName;
   dots: 0 | 1;
+  tupletId?: string;
+  timeModification?: ScoreTimeModification;
 };
 
 export type ScoreChord = ScoreEventBase & {
@@ -79,6 +81,25 @@ export type ScorePart = {
   staves: ScoreStaff[];
 };
 
+export type ScoreTimeModification = {
+  actualNotes: number;
+  normalNotes: number;
+};
+
+export type ScoreTuplet = {
+  id: string;
+  baseId: string;
+  partId: string;
+  sourceTrackIndex: number;
+  staffIndex?: number;
+  voiceIndex?: number;
+  measureIndex: number;
+  startTicks: number;
+  endTicks: number;
+  actualNotes: number;
+  normalNotes: number;
+};
+
 export type ScoreDraft = {
   id: string;
   title: string;
@@ -87,6 +108,7 @@ export type ScoreDraft = {
   durationTicks: number;
   measures: ScoreMeasure[];
   parts: ScorePart[];
+  tuplets: ScoreTuplet[];
   diagnostics: ScoreDiagnostic[];
 };
 
@@ -94,6 +116,8 @@ export type QuantizedNote = MidiNote & {
   quantizedStartTicks: number;
   quantizedEndTicks: number;
   staffIndex: number;
+  tupletId?: string;
+  timeModification?: ScoreTimeModification;
 };
 
 export type CreateScoreDraftInput = {

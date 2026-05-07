@@ -13,7 +13,8 @@ import type {
   ScoreDiagnostic,
   ScoreDraft,
   ScoreEvent,
-  ScorePart
+  ScorePart,
+  ScoreTuplet
 } from "./types";
 
 const PIANO_PROGRAM_MIN = 0;
@@ -29,11 +30,18 @@ type PartSource = {
   isDrum: boolean;
 };
 
+type CreatedPart = {
+  part: ScorePart;
+  tuplets: ScoreTuplet[];
+};
+
 export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDraftInput): ScoreDraft {
   const diagnostics: ScoreDiagnostic[] = [];
   const measures = createMeasureMap(song.meta, diagnostics);
   const gridTicks = shortestNoteTicks(song.meta.ppq, shortestNote);
-  const parts = createPartSources(song).map((source) => createPart(song, source, measures, gridTicks, diagnostics));
+  const createdParts = createPartSources(song).map((source) => createPart(song, source, measures, gridTicks, diagnostics));
+  const parts = createdParts.map((createdPart) => createdPart.part);
+  const tuplets = createdParts.flatMap((createdPart) => createdPart.tuplets);
 
   if (!song.meta.keySignatures.length) {
     diagnostics.push({
@@ -45,7 +53,14 @@ export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDra
 
   for (const part of parts) {
     for (const staff of part.staves) {
-      staff.events = createStaffEvents(part.id, staff.index, staff.events as ScoreChord[], measures, song.meta.ppq);
+      staff.events = createStaffEvents(
+        part.id,
+        staff.index,
+        staff.events as ScoreChord[],
+        measures,
+        song.meta.ppq,
+        tuplets
+      );
     }
   }
 
@@ -57,6 +72,7 @@ export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDra
     durationTicks: song.meta.durationTicks,
     measures,
     parts,
+    tuplets,
     diagnostics
   };
 }
@@ -67,19 +83,21 @@ function createPart(
   measures: ScoreDraft["measures"],
   gridTicks: number,
   diagnostics: ScoreDiagnostic[]
-): ScorePart {
+): CreatedPart {
   const sourceNotes = source.notes;
   const averagePitch =
     sourceNotes.reduce((sum, note) => sum + note.midi, 0) / Math.max(1, sourceNotes.length);
   const useGrandStaff = shouldUseGrandStaff(source);
-  const baseQuantizedNotes = quantizeNotesWithContext({
+  const quantized = quantizeNotesWithContext({
     notes: sourceNotes,
     measures,
     ppq: song.meta.ppq,
     regularGridTicks: gridTicks,
     diagnostics,
-    trackIndex: source.tracks[0]?.index ?? 0
+    trackIndex: source.tracks[0]?.index ?? 0,
+    partId: source.id
   });
+  const baseQuantizedNotes = quantized.notes;
   const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes) : baseQuantizedNotes;
   const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
@@ -87,6 +105,7 @@ function createPart(
   const bassChords = chordEvents.filter((chord) => chord.staffIndex === 1);
   const trebleVoiceCount = assignVoices(trebleChords, firstTrackIndex, diagnostics);
   const bassVoiceCount = assignVoices(bassChords, firstTrackIndex, diagnostics);
+  const tuplets = materializeTuplets(quantized.tuplets, chordEvents, song.meta.ppq);
   const staves = useGrandStaff
     ? [
         {
@@ -112,13 +131,16 @@ function createPart(
       ];
 
   return {
-    id: source.id,
-    name: source.name,
-    sourceTrackIndex: firstTrackIndex,
-    sourceTrackIndexes: source.tracks.map((track) => track.index),
-    program: source.program,
-    isDrum: source.isDrum,
-    staves
+    part: {
+      id: source.id,
+      name: source.name,
+      sourceTrackIndex: firstTrackIndex,
+      sourceTrackIndexes: source.tracks.map((track) => track.index),
+      program: source.program,
+      isDrum: source.isDrum,
+      staves
+    },
+    tuplets
   };
 }
 
@@ -200,7 +222,7 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
   const grouped = new Map<string, QuantizedNote[]>();
 
   for (const note of notes) {
-    const key = `${note.staffIndex}:${note.quantizedStartTicks}:${note.quantizedEndTicks}`;
+    const key = `${note.staffIndex}:${note.quantizedStartTicks}:${note.quantizedEndTicks}:${note.tupletId ?? "regular"}`;
     grouped.set(key, [...(grouped.get(key) ?? []), note]);
   }
 
@@ -210,7 +232,9 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
       const startTicks = Number(tickText);
       const staffIndex = Number(staffIndexText);
       const endTicks = Number(endTickText);
-      const duration = durationNameFromTicks(endTicks - startTicks, ppq);
+      const timeModification = group.find((note) => note.timeModification)?.timeModification;
+      const tupletId = group.find((note) => note.tupletId)?.tupletId;
+      const duration = durationNameFromTicks(endTicks - startTicks, ppq, timeModification);
       const baseId = `${partId}-chord-${index}-${startTicks}`;
 
       return {
@@ -227,6 +251,8 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
         endMs: Math.max(...group.map((note) => note.endMs)),
         durationName: duration.name,
         dots: duration.dots,
+        tupletId,
+        timeModification,
         notes: group
           .sort((a, b) => a.midi - b.midi)
           .map((note) => ({
@@ -247,7 +273,8 @@ function createStaffEvents(
   staffIndex: number,
   chords: ScoreChord[],
   measures: ScoreDraft["measures"],
-  ppq: number
+  ppq: number,
+  tuplets: ScoreTuplet[]
 ): ScoreEvent[] {
   const events: ScoreEvent[] = [];
 
@@ -270,16 +297,117 @@ function createStaffEvents(
         const chordEnd = Math.min(chord.endTicks, measure.endTicks);
 
         if (chordStart > cursor) {
-          events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, chordStart, ppq));
+          events.push(
+            ...spellRestRangeIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, chordStart, ppq, tuplets)
+          );
         }
         events.push(...spellChordIntoMeasure(chord, measure, ppq));
         cursor = Math.max(cursor, chordEnd);
       }
 
       if (cursor < measure.endTicks) {
-        events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, measure.endTicks, ppq));
+        events.push(
+          ...spellRestRangeIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, measure.endTicks, ppq, tuplets)
+        );
       }
     }
+  }
+
+  return events;
+}
+
+function materializeTuplets(baseTuplets: ScoreTuplet[], chords: ScoreChord[], ppq: number): ScoreTuplet[] {
+  const tuplets: ScoreTuplet[] = [];
+
+  for (const baseTuplet of baseTuplets) {
+    const tupletChords = chords.filter((chord) => chord.tupletId === baseTuplet.id);
+    const groups = new Map<string, ScoreChord[]>();
+
+    for (const chord of tupletChords) {
+      const key = `${chord.staffIndex}:${chord.voiceIndex}`;
+      groups.set(key, [...(groups.get(key) ?? []), chord]);
+    }
+
+    for (const [key, group] of groups.entries()) {
+      const uniqueSlots = new Set(group.map((chord) => chord.startTicks));
+      const [staffIndexText, voiceIndexText] = key.split(":");
+
+      if (uniqueSlots.size !== baseTuplet.actualNotes) {
+        for (const chord of group) {
+          chord.tupletId = undefined;
+          chord.timeModification = undefined;
+          const duration = durationNameFromTicks(chord.endTicks - chord.startTicks, ppq);
+          chord.durationName = duration.name;
+          chord.dots = duration.dots;
+        }
+        continue;
+      }
+
+      const id = `${baseTuplet.baseId}-s${staffIndexText}-v${voiceIndexText}`;
+      for (const chord of group) {
+        chord.tupletId = id;
+      }
+      tuplets.push({
+        ...baseTuplet,
+        id,
+        staffIndex: Number(staffIndexText),
+        voiceIndex: Number(voiceIndexText)
+      });
+    }
+  }
+
+  return tuplets;
+}
+
+function spellRestRangeIntoMeasure(
+  partId: string,
+  staffIndex: number,
+  voiceIndex: number,
+  measure: ScoreDraft["measures"][number],
+  startTicks: number,
+  endTicks: number,
+  ppq: number,
+  tuplets: ScoreTuplet[]
+): ScoreEvent[] {
+  const events: ScoreEvent[] = [];
+  const relevantTuplets = tuplets
+    .filter(
+      (tuplet) =>
+        tuplet.partId === partId &&
+        tuplet.staffIndex === staffIndex &&
+        tuplet.voiceIndex === voiceIndex &&
+        tuplet.measureIndex === measure.index &&
+        tuplet.startTicks < endTicks &&
+        tuplet.endTicks > startTicks
+    )
+    .sort((a, b) => a.startTicks - b.startTicks);
+  let cursor = startTicks;
+
+  for (const tuplet of relevantTuplets) {
+    const tupletStart = Math.max(tuplet.startTicks, startTicks);
+    const tupletEnd = Math.min(tuplet.endTicks, endTicks);
+
+    if (tupletStart > cursor) {
+      events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, tupletStart, ppq));
+    }
+
+    if (tupletEnd > tupletStart) {
+      events.push(
+        ...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, tupletStart, tupletEnd, ppq, {
+          tupletId: tuplet.id,
+          timeModification: {
+            actualNotes: tuplet.actualNotes,
+            normalNotes: tuplet.normalNotes
+          }
+        })
+      );
+    }
+
+    cursor = Math.max(cursor, tupletEnd);
+  }
+
+  if (cursor < endTicks) {
+    events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, endTicks, ppq));
   }
 
   return events;

@@ -1,6 +1,6 @@
 import type { MidiNote } from "../midi";
 import { quantizeTicks } from "./durations";
-import type { QuantizedNote, ScoreDiagnostic, ScoreMeasure } from "./types";
+import type { QuantizedNote, ScoreDiagnostic, ScoreMeasure, ScoreTuplet } from "./types";
 
 type QuantizeNotesInput = {
   notes: MidiNote[];
@@ -9,6 +9,7 @@ type QuantizeNotesInput = {
   regularGridTicks: number;
   diagnostics: ScoreDiagnostic[];
   trackIndex: number;
+  partId: string;
 };
 
 type QuantCandidate = {
@@ -27,6 +28,12 @@ type MeasureQuantContext = {
   measure: ScoreMeasure;
   allowsTripletGrid: boolean;
   tripletGridTicks: number;
+  tuplets: ScoreTuplet[];
+};
+
+export type QuantizeNotesResult = {
+  notes: QuantizedNote[];
+  tuplets: ScoreTuplet[];
 };
 
 export function quantizeNotesWithContext({
@@ -35,17 +42,22 @@ export function quantizeNotesWithContext({
   ppq,
   regularGridTicks,
   diagnostics,
-  trackIndex
-}: QuantizeNotesInput): QuantizedNote[] {
-  const contexts = measures.map((measure) => createMeasureQuantContext(measure, notes, ppq, regularGridTicks));
+  trackIndex,
+  partId
+}: QuantizeNotesInput): QuantizeNotesResult {
+  const contexts = measures.map((measure) =>
+    createMeasureQuantContext(measure, notes, ppq, regularGridTicks, trackIndex, partId)
+  );
   reportTripletDiagnostics(contexts, diagnostics, trackIndex);
   const sortedNotes = [...notes].sort((a, b) => a.startTicks - b.startTicks || a.midi - b.midi);
   const startTicksByNoteId = quantizeStarts(sortedNotes, contexts, ppq, regularGridTicks);
 
-  return sortedNotes.map((note) => {
+  return {
+    notes: sortedNotes.map((note) => {
     const context = findContextForTicks(contexts, note.startTicks);
     const quantizedStartTicks = startTicksByNoteId.get(note.id) ?? quantizeTicks(note.startTicks, regularGridTicks);
     let quantizedEndTicks = quantizeEndTicks(note, quantizedStartTicks, context, regularGridTicks);
+    const tuplet = findTupletForRange(contexts, quantizedStartTicks, quantizedEndTicks);
 
     if (quantizedEndTicks <= quantizedStartTicks) {
       quantizedEndTicks = quantizedStartTicks + Math.max(1, Math.min(regularGridTicks, context.tripletGridTicks));
@@ -55,9 +67,18 @@ export function quantizeNotesWithContext({
       ...note,
       quantizedStartTicks,
       quantizedEndTicks,
-      staffIndex: 0
+      staffIndex: 0,
+      tupletId: tuplet?.id,
+      timeModification: tuplet
+        ? {
+            actualNotes: tuplet.actualNotes,
+            normalNotes: tuplet.normalNotes
+          }
+        : undefined
     };
-  });
+  }),
+    tuplets: contexts.flatMap((context) => context.tuplets)
+  };
 }
 
 function quantizeStarts(
@@ -212,7 +233,9 @@ function createMeasureQuantContext(
   measure: ScoreMeasure,
   notes: MidiNote[],
   ppq: number,
-  regularGridTicks: number
+  regularGridTicks: number,
+  trackIndex: number,
+  partId: string
 ): MeasureQuantContext {
   const tripletGridTicks = Math.max(1, Math.round(ppq / 3));
   const measureNotes = notes.filter((note) => note.startTicks >= measure.startTicks && note.startTicks < measure.endTicks);
@@ -229,8 +252,59 @@ function createMeasureQuantContext(
   return {
     measure,
     allowsTripletGrid: tripletLikeOnsets.size >= 3,
-    tripletGridTicks
+    tripletGridTicks,
+    tuplets: createTripletTuplets(measure, measureNotes, ppq, regularGridTicks, tripletGridTicks, trackIndex, partId)
   };
+}
+
+function createTripletTuplets(
+  measure: ScoreMeasure,
+  notes: MidiNote[],
+  ppq: number,
+  regularGridTicks: number,
+  tripletGridTicks: number,
+  trackIndex: number,
+  partId: string
+): ScoreTuplet[] {
+  const tuplets: ScoreTuplet[] = [];
+  const beatTicks = Math.max(1, Math.round((ppq * 4) / measure.denominator));
+
+  for (let startTicks = measure.startTicks; startTicks + beatTicks <= measure.endTicks; startTicks += beatTicks) {
+    const matchingSlots = new Set<number>();
+    for (const note of notes) {
+      if (note.startTicks < startTicks || note.startTicks >= startTicks + beatTicks) {
+        continue;
+      }
+
+      const regularDistance = distanceToGrid(note.startTicks, startTicks, regularGridTicks);
+      const tripletDistance = distanceToGrid(note.startTicks, startTicks, tripletGridTicks);
+      const slot = Math.round((note.startTicks - startTicks) / tripletGridTicks);
+      if (
+        slot >= 0 &&
+        slot < 3 &&
+        tripletDistance + regularGridTicks * 0.12 < regularDistance &&
+        tripletDistance <= tripletGridTicks * 0.24
+      ) {
+        matchingSlots.add(slot);
+      }
+    }
+
+    if (matchingSlots.size === 3) {
+      tuplets.push({
+        id: `${partId}-tuplet-${measure.index}-${startTicks}`,
+        baseId: `${partId}-tuplet-${measure.index}-${startTicks}`,
+        partId,
+        sourceTrackIndex: trackIndex,
+        measureIndex: measure.index,
+        startTicks,
+        endTicks: startTicks + beatTicks,
+        actualNotes: 3,
+        normalNotes: 2
+      });
+    }
+  }
+
+  return tuplets;
 }
 
 function reportTripletDiagnostics(
@@ -257,6 +331,11 @@ function findContextForTicks(contexts: MeasureQuantContext[], ticks: number): Me
     contexts.find((context) => ticks >= context.measure.startTicks && ticks < context.measure.endTicks) ??
     contexts[contexts.length - 1]
   );
+}
+
+function findTupletForRange(contexts: MeasureQuantContext[], startTicks: number, endTicks: number): ScoreTuplet | undefined {
+  const context = findContextForTicks(contexts, startTicks);
+  return context.tuplets.find((tuplet) => startTicks >= tuplet.startTicks && endTicks <= tuplet.endTicks);
 }
 
 function transitionPenalty(

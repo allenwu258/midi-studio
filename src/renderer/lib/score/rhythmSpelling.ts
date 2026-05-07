@@ -1,5 +1,5 @@
 import { durationNameFromTicks } from "./durations";
-import type { ScoreChord, ScoreMeasure, ScoreRest } from "./types";
+import type { ScoreChord, ScoreMeasure, ScoreRest, ScoreTimeModification } from "./types";
 
 type RhythmSegment = {
   startTicks: number;
@@ -18,7 +18,7 @@ export function spellChordIntoMeasure(
   const segments = splitRangeAtReadableBoundaries(clippedStart, clippedEnd, measure, ppq, "chord");
 
   return segments.map((segment, index) => {
-    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq);
+    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq, chord.timeModification);
     const ratioStart = (segment.startTicks - chord.startTicks) / Math.max(1, chord.endTicks - chord.startTicks);
     const ratioEnd = (segment.endTicks - chord.startTicks) / Math.max(1, chord.endTicks - chord.startTicks);
     const msRange = chord.endMs - chord.startMs;
@@ -46,10 +46,11 @@ export function spellRestIntoMeasure(
   measure: ScoreMeasure,
   startTicks: number,
   endTicks: number,
-  ppq: number
+  ppq: number,
+  tupletContext?: { tupletId: string; timeModification: ScoreTimeModification }
 ): ScoreRest[] {
   return splitRangeAtReadableBoundaries(startTicks, endTicks, measure, ppq, "rest").map((segment, index) => {
-    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq);
+    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq, tupletContext?.timeModification);
     const baseId = `${partId}-rest-${staffIndex}-${voiceIndex}-${measure.index}-${segment.startTicks}`;
 
     return {
@@ -65,7 +66,9 @@ export function spellRestIntoMeasure(
       startMs: 0,
       endMs: 0,
       durationName: duration.name,
-      dots: duration.dots
+      dots: duration.dots,
+      tupletId: tupletContext?.tupletId,
+      timeModification: tupletContext?.timeModification
     };
   });
 }

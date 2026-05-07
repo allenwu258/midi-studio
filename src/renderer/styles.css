@@ -314,6 +314,21 @@ h3 {
   vector-effect: non-scaling-stroke;
 }
 
+.tuplet-mark path {
+  fill: none;
+  stroke: #526171;
+  stroke-width: 1.2;
+  vector-effect: non-scaling-stroke;
+}
+
+.tuplet-mark text {
+  fill: #526171;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
 .score-event.active .note-head {
   fill: #087c73;
   stroke: #065f57;
@@ -327,6 +342,14 @@ h3 {
 .beam-group.active .beam-line,
 .beam-group.active .note-stem {
   stroke: #087c73;
+}
+
+.tuplet-mark.active path {
+  stroke: #087c73;
+}
+
+.tuplet-mark.active text {
+  fill: #087c73;
 }
 
 .score-diagnostics {
