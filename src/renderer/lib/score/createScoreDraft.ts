@@ -103,8 +103,8 @@ function createPart(
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
   const trebleChords = chordEvents.filter((chord) => chord.staffIndex === 0);
   const bassChords = chordEvents.filter((chord) => chord.staffIndex === 1);
-  const trebleVoiceCount = assignVoices(trebleChords, firstTrackIndex, diagnostics);
-  const bassVoiceCount = assignVoices(bassChords, firstTrackIndex, diagnostics);
+  const trebleVoiceCount = assignVoices(trebleChords, measures, song.meta.ppq, firstTrackIndex, diagnostics);
+  const bassVoiceCount = assignVoices(bassChords, measures, song.meta.ppq, firstTrackIndex, diagnostics);
   const tuplets = materializeTuplets(quantized.tuplets, chordEvents, song.meta.ppq);
   const staves = useGrandStaff
     ? [
