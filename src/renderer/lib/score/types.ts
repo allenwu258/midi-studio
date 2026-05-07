@@ -97,6 +97,8 @@ export type ScoreTuplet = {
   measureIndex: number;
   startTicks: number;
   endTicks: number;
+  slotTicks: number;
+  slots: number[];
   actualNotes: number;
   normalNotes: number;
 };

@@ -1,5 +1,6 @@
 import type { MidiNote } from "../midi";
-import { quantizeTicks } from "./durations";
+import { durationNameFromTicks, quantizeTicks } from "./durations";
+import { createMeterStructure } from "./meterStructure";
 import type { QuantizedNote, ScoreDiagnostic, ScoreMeasure, ScoreTuplet } from "./types";
 
 type QuantizeNotesInput = {
@@ -26,6 +27,7 @@ type QuantState = {
 
 type MeasureQuantContext = {
   measure: ScoreMeasure;
+  ppq: number;
   allowsTripletGrid: boolean;
   tripletGridTicks: number;
   tuplets: ScoreTuplet[];
@@ -222,11 +224,8 @@ function quantizeEndTicks(
   context: MeasureQuantContext,
   regularGridTicks: number
 ): number {
-  const gridTicks = context.allowsTripletGrid && isCloserToGrid(note.endTicks, context.measure.startTicks, context.tripletGridTicks, regularGridTicks)
-    ? context.tripletGridTicks
-    : regularGridTicks;
-  const raw = quantizeTicks(note.endTicks - context.measure.startTicks, gridTicks) + context.measure.startTicks;
-  return Math.max(quantizedStartTicks + 1, raw);
+  return endCandidates(note, quantizedStartTicks, context, regularGridTicks)
+    .sort((a, b) => a.penalty - b.penalty || a.ticks - b.ticks)[0].ticks;
 }
 
 function createMeasureQuantContext(
@@ -249,11 +248,14 @@ function createMeasureQuantContext(
     }
   }
 
+  const tuplets = createTripletTuplets(measure, measureNotes, ppq, regularGridTicks, tripletGridTicks, trackIndex, partId);
+
   return {
     measure,
-    allowsTripletGrid: tripletLikeOnsets.size >= 3,
+    ppq,
+    allowsTripletGrid: tripletLikeOnsets.size >= 3 || tuplets.length > 0,
     tripletGridTicks,
-    tuplets: createTripletTuplets(measure, measureNotes, ppq, regularGridTicks, tripletGridTicks, trackIndex, partId)
+    tuplets
   };
 }
 
@@ -267,18 +269,21 @@ function createTripletTuplets(
   partId: string
 ): ScoreTuplet[] {
   const tuplets: ScoreTuplet[] = [];
-  const beatTicks = Math.max(1, Math.round((ppq * 4) / measure.denominator));
+  const meter = createMeterStructure(measure, ppq);
 
-  for (let startTicks = measure.startTicks; startTicks + beatTicks <= measure.endTicks; startTicks += beatTicks) {
+  for (const group of meter.groups) {
+    const groupTicks = group.endTicks - group.startTicks;
+    const isSimpleTripletGroup = groupTicks === Math.max(1, Math.round((ppq * 4) / measure.denominator));
+    const tupletGridTicks = isSimpleTripletGroup ? tripletGridTicks : Math.max(1, Math.round(groupTicks / 3));
     const matchingSlots = new Set<number>();
     for (const note of notes) {
-      if (note.startTicks < startTicks || note.startTicks >= startTicks + beatTicks) {
+      if (note.startTicks < group.startTicks || note.startTicks >= group.endTicks) {
         continue;
       }
 
-      const regularDistance = distanceToGrid(note.startTicks, startTicks, regularGridTicks);
-      const tripletDistance = distanceToGrid(note.startTicks, startTicks, tripletGridTicks);
-      const slot = Math.round((note.startTicks - startTicks) / tripletGridTicks);
+      const regularDistance = distanceToGrid(note.startTicks, group.startTicks, regularGridTicks);
+      const tripletDistance = distanceToGrid(note.startTicks, group.startTicks, tupletGridTicks);
+      const slot = Math.round((note.startTicks - group.startTicks) / tupletGridTicks);
       if (
         slot >= 0 &&
         slot < 3 &&
@@ -289,15 +294,17 @@ function createTripletTuplets(
       }
     }
 
-    if (matchingSlots.size === 3) {
+    if (matchingSlots.size >= 2) {
       tuplets.push({
-        id: `${partId}-tuplet-${measure.index}-${startTicks}`,
-        baseId: `${partId}-tuplet-${measure.index}-${startTicks}`,
+        id: `${partId}-tuplet-${measure.index}-${group.startTicks}`,
+        baseId: `${partId}-tuplet-${measure.index}-${group.startTicks}`,
         partId,
         sourceTrackIndex: trackIndex,
         measureIndex: measure.index,
-        startTicks,
-        endTicks: startTicks + beatTicks,
+        startTicks: group.startTicks,
+        endTicks: group.endTicks,
+        slotTicks: tupletGridTicks,
+        slots: [...matchingSlots].sort((a, b) => a - b),
         actualNotes: 3,
         normalNotes: 2
       });
@@ -305,6 +312,82 @@ function createTripletTuplets(
   }
 
   return tuplets;
+}
+
+function endCandidates(
+  note: MidiNote,
+  quantizedStartTicks: number,
+  context: MeasureQuantContext,
+  regularGridTicks: number
+): Array<{ ticks: number; penalty: number }> {
+  const candidates = new Map<number, number>();
+  const grids = context.allowsTripletGrid
+    ? [regularGridTicks, context.tripletGridTicks]
+    : [regularGridTicks];
+
+  for (const gridTicks of grids) {
+    addEndCandidate(candidates, note, quantizedStartTicks, context, gridTicks);
+    const rounded = quantizeTicks(note.endTicks - context.measure.startTicks, gridTicks) + context.measure.startTicks;
+    for (const ticks of [rounded - gridTicks, rounded + gridTicks]) {
+      addEndCandidate(candidates, note, quantizedStartTicks, context, gridTicks, ticks);
+    }
+  }
+
+  for (const boundary of endBoundaryCandidates(note, context)) {
+    addEndCandidate(candidates, note, quantizedStartTicks, context, regularGridTicks, boundary);
+  }
+
+  if (!candidates.size) {
+    const fallback = quantizedStartTicks + Math.max(1, regularGridTicks);
+    candidates.set(fallback, Number.POSITIVE_INFINITY);
+  }
+
+  return [...candidates.entries()].map(([ticks, penalty]) => ({ ticks, penalty }));
+}
+
+function addEndCandidate(
+  candidates: Map<number, number>,
+  note: MidiNote,
+  quantizedStartTicks: number,
+  context: MeasureQuantContext,
+  gridTicks: number,
+  explicitTicks?: number
+) {
+  const ticks = explicitTicks ?? quantizeTicks(note.endTicks - context.measure.startTicks, gridTicks) + context.measure.startTicks;
+  if (ticks <= quantizedStartTicks) {
+    return;
+  }
+
+  const penalty = endCandidatePenalty(note, quantizedStartTicks, ticks, context);
+  const existing = candidates.get(ticks);
+  if (existing === undefined || penalty < existing) {
+    candidates.set(ticks, penalty);
+  }
+}
+
+function endBoundaryCandidates(note: MidiNote, context: MeasureQuantContext): number[] {
+  return [
+    context.measure.startTicks,
+    context.measure.endTicks,
+    ...context.tuplets.flatMap((tuplet) => [tuplet.startTicks, tuplet.endTicks])
+  ].filter((ticks) => Math.abs(note.endTicks - ticks) <= Math.max(12, context.tripletGridTicks * 0.3));
+}
+
+function endCandidatePenalty(
+  note: MidiNote,
+  quantizedStartTicks: number,
+  candidateEndTicks: number,
+  context: MeasureQuantContext
+): number {
+  const durationTicks = candidateEndTicks - quantizedStartTicks;
+  const distancePenalty = Math.abs(note.endTicks - candidateEndTicks);
+  const duration = durationNameFromTicks(durationTicks, context.ppq);
+  const dotPenalty = duration.dots * 4;
+  const shortFragmentPenalty = duration.name === "32nd" ? 8 : 0;
+  const boundaryBonus = candidateEndTicks === context.measure.endTicks ? -6 : 0;
+  const tupletBonus = context.tuplets.some((tuplet) => candidateEndTicks === tuplet.endTicks || candidateEndTicks === tuplet.startTicks) ? -4 : 0;
+
+  return distancePenalty + dotPenalty + shortFragmentPenalty + boundaryBonus + tupletBonus;
 }
 
 function reportTripletDiagnostics(
@@ -335,7 +418,22 @@ function findContextForTicks(contexts: MeasureQuantContext[], ticks: number): Me
 
 function findTupletForRange(contexts: MeasureQuantContext[], startTicks: number, endTicks: number): ScoreTuplet | undefined {
   const context = findContextForTicks(contexts, startTicks);
-  return context.tuplets.find((tuplet) => startTicks >= tuplet.startTicks && endTicks <= tuplet.endTicks);
+  return context.tuplets.find(
+    (tuplet) =>
+      startTicks >= tuplet.startTicks &&
+      endTicks <= tuplet.endTicks &&
+      isTupletSlotStart(startTicks, tuplet)
+  );
+}
+
+function isTupletSlotStart(startTicks: number, tuplet: ScoreTuplet): boolean {
+  const offset = startTicks - tuplet.startTicks;
+  if (offset < 0 || offset % tuplet.slotTicks !== 0) {
+    return false;
+  }
+
+  const slot = offset / tuplet.slotTicks;
+  return slot >= 0 && slot < tuplet.actualNotes && tuplet.slots.includes(slot);
 }
 
 function transitionPenalty(

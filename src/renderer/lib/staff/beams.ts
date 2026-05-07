@@ -1,4 +1,5 @@
 import type { ScoreChord, ScoreDurationName, ScoreMeasure, ScoreStaff } from "../score";
+import { createMeterStructure } from "../score/meterStructure";
 import type { RenderBeamGroup, RenderBeamPoint, RenderEvent, RenderLayoutOptions, StemDirection } from "./types";
 
 export function createBeamGroups(
@@ -14,6 +15,7 @@ export function createBeamGroups(
     .map((renderEvent) => renderEvent as RenderEvent & { event: ScoreChord });
   const groups: RenderBeamGroup[] = [];
   const voiceIndexes = [...new Set(chords.map((renderEvent) => renderEvent.event.voiceIndex))].sort((a, b) => a - b);
+  const meter = createMeterStructure(measure, ppq);
 
   for (const voiceIndex of voiceIndexes) {
     const voiceChords = chords
@@ -23,15 +25,16 @@ export function createBeamGroups(
 
     for (const renderEvent of voiceChords) {
       const chord = renderEvent.event;
-      const beatIndex = Math.floor((chord.startTicks - measure.startTicks) / ppq);
-      const currentBeatIndex = current.length
-        ? Math.floor((current[0].event.startTicks - measure.startTicks) / ppq)
-        : beatIndex;
+      const groupIndex = meter.groups.findIndex((group) => chord.startTicks >= group.startTicks && chord.startTicks < group.endTicks);
+      const currentGroupIndex = current.length
+        ? meter.groups.findIndex((group) => current[0].event.startTicks >= group.startTicks && current[0].event.startTicks < group.endTicks)
+        : groupIndex;
       const previous = current[current.length - 1]?.event;
       const separatedByRest = previous ? chord.startTicks > previous.endTicks + ppq / 8 : false;
+      const crossesMeterGroup = groupIndex !== currentGroupIndex;
 
-      if (!isBeamable(chord) || beatIndex !== currentBeatIndex || separatedByRest) {
-        pushBeamGroup(groups, current, staff, staffTop, options);
+      if (!isBeamable(chord) || crossesMeterGroup || separatedByRest) {
+        pushBeamGroup(groups, current, measure, ppq, staff, staffTop, options);
         current = [];
       }
 
@@ -40,7 +43,7 @@ export function createBeamGroups(
       }
     }
 
-    pushBeamGroup(groups, current, staff, staffTop, options);
+    pushBeamGroup(groups, current, measure, ppq, staff, staffTop, options);
   }
 
   return groups;
@@ -78,6 +81,8 @@ export function stemDirectionForChord(
 function pushBeamGroup(
   groups: RenderBeamGroup[],
   events: Array<RenderEvent & { event: ScoreChord }>,
+  measure: ScoreMeasure,
+  ppq: number,
   staff: ScoreStaff,
   staffTop: number,
   options: RenderLayoutOptions
@@ -87,7 +92,7 @@ function pushBeamGroup(
   }
 
   const direction = stemDirectionForBeam(events, staff, staffTop, options);
-  const points = createBeamPoints(events, direction, options);
+  const points = createBeamPoints(events, measure, ppq, direction, options);
   const maxBeamCount = Math.max(...events.map((renderEvent) => beamCount(renderEvent.event.durationName)));
   groups.push({
     id: `${events[0].event.id}-beam-${events[events.length - 1].event.id}`,
@@ -100,6 +105,8 @@ function pushBeamGroup(
 
 function createBeamPoints(
   events: Array<RenderEvent & { event: ScoreChord }>,
+  measure: ScoreMeasure,
+  ppq: number,
   direction: StemDirection,
   options: RenderLayoutOptions
 ): RenderBeamPoint[] {
@@ -114,17 +121,19 @@ function createBeamPoints(
   }));
   const first = stems[0];
   const last = stems[stems.length - 1];
+  const stemLength = normalizedStemLength(events, options);
   const anchorY =
     direction === "up"
-      ? Math.min(...stems.map((stem) => stem.baseY)) - options.stemLength
-      : Math.max(...stems.map((stem) => stem.baseY)) + options.stemLength;
-  const slope = clamp((last.baseY - first.baseY) * 0.18, -7, 7);
+      ? Math.min(...stems.map((stem) => stem.baseY)) - stemLength
+      : Math.max(...stems.map((stem) => stem.baseY)) + stemLength;
+  const slope = clamp((last.baseY - first.baseY) * 0.16, -6, 6);
   const startBeamY = anchorY - slope / 2;
   const endBeamY = anchorY + slope / 2;
 
   return stems.map((stem) => ({
     ...stem,
-    beamY: lineYAt(stem.stemX, first.stemX, last.stemX, startBeamY, endBeamY)
+    beamY: lineYAt(stem.stemX, first.stemX, last.stemX, startBeamY, endBeamY),
+    secondaryBreakBefore: isSecondaryBeamBreak(stem.event.startTicks, measure, ppq)
   }));
 }
 
@@ -149,6 +158,25 @@ function stemDirectionForBeam(
 
 function isBeamable(event: ScoreChord): boolean {
   return beamCount(event.durationName) > 0 && event.dots === 0;
+}
+
+function normalizedStemLength(events: Array<RenderEvent & { event: ScoreChord }>, options: RenderLayoutOptions): number {
+  const yValues = events.flatMap((event) => event.notes.map((note) => note.y));
+  const span = Math.max(...yValues) - Math.min(...yValues);
+  return options.stemLength + Math.min(12, span * 0.12);
+}
+
+function isSecondaryBeamBreak(ticks: number, measure: ScoreMeasure, ppq: number): boolean {
+  if (ticks <= measure.startTicks) {
+    return false;
+  }
+
+  const beatTicks = Math.max(1, Math.round((ppq * 4) / measure.denominator));
+  if (measure.denominator === 8 && measure.numerator % 3 === 0 && measure.numerator > 3) {
+    return (ticks - measure.startTicks) % beatTicks === 0;
+  }
+
+  return (ticks - measure.startTicks) % Math.max(1, beatTicks / 2) === 0;
 }
 
 function clamp(value: number, min: number, max: number): number {

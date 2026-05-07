@@ -106,6 +106,7 @@ export type RenderBeamPoint = {
   stemX: number;
   baseY: number;
   beamY: number;
+  secondaryBreakBefore: boolean;
 };
 
 export type RenderTuplet = {

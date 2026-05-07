@@ -463,12 +463,13 @@ function beamSegments(points: RenderBeamPoint[], level: number): Array<{ x1: num
   for (let index = 0; index <= points.length; index += 1) {
     const point = points[index];
     const hasBeam = point ? beamCountForEvent(point.event.durationName) >= level : false;
+    const breaksSecondary = Boolean(point?.secondaryBreakBefore && level > 1);
 
     if (hasBeam && startIndex === null) {
       startIndex = index;
     }
 
-    if ((!hasBeam || index === points.length) && startIndex !== null) {
+    if ((!hasBeam || breaksSecondary || index === points.length) && startIndex !== null) {
       const endIndex = index - 1;
 
       if (endIndex > startIndex) {
@@ -492,6 +493,10 @@ function beamSegments(points: RenderBeamPoint[], level: number): Array<{ x1: num
       }
 
       startIndex = null;
+    }
+
+    if (hasBeam && breaksSecondary) {
+      startIndex = index;
     }
   }
 

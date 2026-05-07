@@ -125,10 +125,23 @@ function validateTuplets(file, score, measureByIndex, eventsByTuplet) {
     assert(file, tuplet.actualNotes > tuplet.normalNotes, `tuplet ${tuplet.id} must compress actual notes`);
     assert(file, Number.isInteger(tuplet.staffIndex), `tuplet ${tuplet.id} must have staffIndex`);
     assert(file, Number.isInteger(tuplet.voiceIndex), `tuplet ${tuplet.id} must have voiceIndex`);
+    if (tuplet.slotTicks !== undefined || tuplet.slots !== undefined) {
+      assert(file, Number.isInteger(tuplet.slotTicks) && tuplet.slotTicks > 0, `tuplet ${tuplet.id} must have positive slotTicks`);
+      assert(file, Array.isArray(tuplet.slots) && tuplet.slots.length > 0, `tuplet ${tuplet.id} must declare occupied slots`);
+      for (const slot of tuplet.slots ?? []) {
+        assert(file, Number.isInteger(slot) && slot >= 0 && slot < tuplet.actualNotes, `tuplet ${tuplet.id} has invalid slot ${slot}`);
+      }
+    }
 
     const events = (eventsByTuplet.get(tuplet.id) ?? []).sort((a, b) => a.startTicks - b.startTicks);
     assert(file, events.length > 0, `tuplet ${tuplet.id} has no events`);
     assert(file, new Set(events.map((event) => event.startTicks)).size === tuplet.actualNotes, `tuplet ${tuplet.id} does not cover ${tuplet.actualNotes} slots`);
+    if (tuplet.slotTicks !== undefined && Array.isArray(tuplet.slots)) {
+      for (const event of events.filter((item) => item.kind === "chord")) {
+        const slot = (event.startTicks - tuplet.startTicks) / tuplet.slotTicks;
+        assert(file, Number.isInteger(slot) && tuplet.slots.includes(slot), `event ${event.id} starts outside declared tuplet slots`);
+      }
+    }
 
     let cursor = tuplet.startTicks;
     for (const event of events) {

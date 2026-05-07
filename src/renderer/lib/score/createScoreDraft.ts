@@ -98,7 +98,7 @@ function createPart(
     partId: source.id
   });
   const baseQuantizedNotes = quantized.notes;
-  const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes) : baseQuantizedNotes;
+  const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes, measures) : baseQuantizedNotes;
   const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
   const trebleChords = chordEvents.filter((chord) => chord.staffIndex === 0);
@@ -329,10 +329,14 @@ function materializeTuplets(baseTuplets: ScoreTuplet[], chords: ScoreChord[], pp
     }
 
     for (const [key, group] of groups.entries()) {
-      const uniqueSlots = new Set(group.map((chord) => chord.startTicks));
+      const uniqueSlots = new Set(group.map((chord) => slotIndexForTuplet(chord.startTicks, baseTuplet)));
       const [staffIndexText, voiceIndexText] = key.split(":");
 
-      if (uniqueSlots.size !== baseTuplet.actualNotes) {
+      if (
+        uniqueSlots.size < 2 ||
+        uniqueSlots.size > baseTuplet.actualNotes ||
+        [...uniqueSlots].some((slot) => slot === null || !baseTuplet.slots.includes(slot))
+      ) {
         for (const chord of group) {
           chord.tupletId = undefined;
           chord.timeModification = undefined;
@@ -357,6 +361,16 @@ function materializeTuplets(baseTuplets: ScoreTuplet[], chords: ScoreChord[], pp
   }
 
   return tuplets;
+}
+
+function slotIndexForTuplet(startTicks: number, tuplet: ScoreTuplet): number | null {
+  const offset = startTicks - tuplet.startTicks;
+  if (offset < 0 || offset % tuplet.slotTicks !== 0) {
+    return null;
+  }
+
+  const slot = offset / tuplet.slotTicks;
+  return slot >= 0 && slot < tuplet.actualNotes ? slot : null;
 }
 
 function spellRestRangeIntoMeasure(

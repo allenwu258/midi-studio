@@ -1,4 +1,4 @@
-import type { QuantizedNote } from "./types";
+import type { QuantizedNote, ScoreMeasure } from "./types";
 
 const TREBLE_STAFF = 0;
 const BASS_STAFF = 1;
@@ -6,13 +6,18 @@ const DEFAULT_SPLIT_MIDI = 60;
 const COMFORT_LOW_TREBLE = 55;
 const COMFORT_HIGH_BASS = 65;
 const MAX_COMFORTABLE_HAND_SPAN = 16;
+const TREBLE_LEDGER_LOW = 60;
+const BASS_LEDGER_HIGH = 59;
 
 type PianoSplitCandidate = {
   splitIndex: number;
   staffByNoteId: Map<string, number>;
   localCost: number;
+  startTicks: number;
   trebleAverage: number | null;
   bassAverage: number | null;
+  trebleEndTicks: number | null;
+  bassEndTicks: number | null;
 };
 
 type PianoSplitState = {
@@ -20,12 +25,16 @@ type PianoSplitState = {
   previousIndex: number;
 };
 
-export function assignPianoStaves(notes: QuantizedNote[], splitMidi = DEFAULT_SPLIT_MIDI): QuantizedNote[] {
+export function assignPianoStaves(
+  notes: QuantizedNote[],
+  measures: ScoreMeasure[] = [],
+  splitMidi = DEFAULT_SPLIT_MIDI
+): QuantizedNote[] {
   if (notes.length === 0) {
     return notes;
   }
 
-  const groups = groupNotesByOnset(notes);
+  const groups = groupNotesByOnset(notes, measures);
   const candidates = groups.map((group) => createCandidates(group, splitMidi));
   const bestPath = chooseBestCandidatePath(candidates);
   const staffByNoteId = new Map<string, number>();
@@ -43,16 +52,25 @@ export function assignPianoStaves(notes: QuantizedNote[], splitMidi = DEFAULT_SP
   }));
 }
 
-function groupNotesByOnset(notes: QuantizedNote[]): QuantizedNote[][] {
+function groupNotesByOnset(notes: QuantizedNote[], measures: ScoreMeasure[]): QuantizedNote[][] {
   const groups = new Map<number, QuantizedNote[]>();
 
   for (const note of notes) {
     groups.set(note.quantizedStartTicks, [...(groups.get(note.quantizedStartTicks) ?? []), note]);
   }
 
-  return [...groups.values()]
+  const onsetGroups = [...groups.values()]
     .map((group) => group.sort((a, b) => a.midi - b.midi || a.quantizedEndTicks - b.quantizedEndTicks))
     .sort((a, b) => a[0].quantizedStartTicks - b[0].quantizedStartTicks);
+
+  if (!measures.length) {
+    return onsetGroups;
+  }
+
+  return onsetGroups.sort((a, b) =>
+    measureIndexForTicks(a[0].quantizedStartTicks, measures) - measureIndexForTicks(b[0].quantizedStartTicks, measures) ||
+    a[0].quantizedStartTicks - b[0].quantizedStartTicks
+  );
 }
 
 function createCandidates(group: QuantizedNote[], splitMidi: number): PianoSplitCandidate[] {
@@ -73,14 +91,20 @@ function createCandidates(group: QuantizedNote[], splitMidi: number): PianoSplit
     candidates.push({
       splitIndex,
       staffByNoteId,
+      startTicks: group[0]?.quantizedStartTicks ?? 0,
       localCost:
         handPitchCost(trebleNotes, TREBLE_STAFF, splitMidi) +
         handPitchCost(bassNotes, BASS_STAFF, splitMidi) +
         handSpanCost(trebleNotes) +
         handSpanCost(bassNotes) +
+        ledgerLineCost(trebleNotes, TREBLE_STAFF) +
+        ledgerLineCost(bassNotes, BASS_STAFF) +
+        crossStaffCost(bassNotes, trebleNotes) +
         emptyHandCost(group, bassNotes, trebleNotes),
       trebleAverage: averagePitch(trebleNotes),
-      bassAverage: averagePitch(bassNotes)
+      bassAverage: averagePitch(bassNotes),
+      trebleEndTicks: endTicks(trebleNotes),
+      bassEndTicks: endTicks(bassNotes)
     });
   }
 
@@ -176,6 +200,7 @@ function transitionCost(previous: PianoSplitCandidate, current: PianoSplitCandid
   const splitJump = Math.abs(current.splitIndex - previous.splitIndex) * 2.25;
   const trebleJump = averageJump(previous.trebleAverage, current.trebleAverage) * 0.18;
   const bassJump = averageJump(previous.bassAverage, current.bassAverage) * 0.18;
+  const sustainContinuity = sustainContinuityCost(previous, current);
   const handDropout =
     (previous.trebleAverage === null && current.trebleAverage !== null) ||
     (previous.trebleAverage !== null && current.trebleAverage === null) ||
@@ -184,7 +209,54 @@ function transitionCost(previous: PianoSplitCandidate, current: PianoSplitCandid
       ? 3
       : 0;
 
-  return splitJump + trebleJump + bassJump + handDropout;
+  return splitJump + trebleJump + bassJump + sustainContinuity + handDropout;
+}
+
+function ledgerLineCost(notes: QuantizedNote[], staffIndex: number): number {
+  return notes.reduce((cost, note) => {
+    if (staffIndex === TREBLE_STAFF) {
+      return cost + Math.max(0, TREBLE_LEDGER_LOW - note.midi) * 1.8;
+    }
+
+    return cost + Math.max(0, note.midi - BASS_LEDGER_HIGH) * 1.8;
+  }, 0);
+}
+
+function crossStaffCost(bassNotes: QuantizedNote[], trebleNotes: QuantizedNote[]): number {
+  if (!bassNotes.length || !trebleNotes.length) {
+    return 0;
+  }
+
+  const bassHigh = Math.max(...bassNotes.map((note) => note.midi));
+  const trebleLow = Math.min(...trebleNotes.map((note) => note.midi));
+  return bassHigh > trebleLow ? (bassHigh - trebleLow + 1) * 14 : 0;
+}
+
+function sustainContinuityCost(previous: PianoSplitCandidate, current: PianoSplitCandidate): number {
+  const trebleOverlap =
+    previous.trebleEndTicks !== null &&
+    current.trebleAverage !== null &&
+    previous.trebleEndTicks > current.startTicks;
+  const bassOverlap =
+    previous.bassEndTicks !== null &&
+    current.bassAverage !== null &&
+    previous.bassEndTicks > current.startTicks;
+  const trebleCost = trebleOverlap && current.trebleAverage !== null && previous.bassAverage !== null && current.trebleAverage < previous.bassAverage
+    ? 12
+    : 0;
+  const bassCost = bassOverlap && current.bassAverage !== null && previous.trebleAverage !== null && current.bassAverage > previous.trebleAverage
+    ? 12
+    : 0;
+
+  return trebleCost + bassCost;
+}
+
+function endTicks(notes: QuantizedNote[]): number | null {
+  return notes.length ? Math.max(...notes.map((note) => note.quantizedEndTicks)) : null;
+}
+
+function measureIndexForTicks(ticks: number, measures: ScoreMeasure[]): number {
+  return measures.find((measure) => ticks >= measure.startTicks && ticks < measure.endTicks)?.index ?? measures.length;
 }
 
 function averagePitch(notes: QuantizedNote[]): number | null {
