@@ -1,0 +1,173 @@
+{
+  "id": "fixture-basic-grand-staff",
+  "title": "Basic Grand Staff Fixture",
+  "ppq": 480,
+  "durationMs": 2000,
+  "durationTicks": 1920,
+  "measures": [
+    {
+      "id": "measure-0",
+      "index": 0,
+      "startTicks": 0,
+      "endTicks": 1920,
+      "numerator": 4,
+      "denominator": 4
+    }
+  ],
+  "parts": [
+    {
+      "id": "part-0",
+      "name": "Piano",
+      "sourceTrackIndex": 0,
+      "sourceTrackIndexes": [0],
+      "program": 0,
+      "isDrum": false,
+      "staves": [
+        {
+          "index": 0,
+          "clef": "treble",
+          "voiceCount": 1,
+          "events": [
+            {
+              "id": "part-0-chord-0-m0-0",
+              "baseId": "part-0-chord-0",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "chord",
+              "startTicks": 0,
+              "endTicks": 480,
+              "startMs": 0,
+              "endMs": 500,
+              "durationName": "quarter",
+              "dots": 0,
+              "notes": [
+                {
+                  "midi": 60,
+                  "step": "C",
+                  "alter": 0,
+                  "octave": 4,
+                  "sourceNoteId": "n0",
+                  "velocity": 0.8
+                }
+              ],
+              "sourceNoteIds": ["n0"],
+              "tieStart": false,
+              "tieStop": false
+            },
+            {
+              "id": "part-0-rest-0-0-480-0",
+              "baseId": "part-0-rest-0-0-480",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "rest",
+              "startTicks": 480,
+              "endTicks": 960,
+              "startMs": 0,
+              "endMs": 0,
+              "durationName": "quarter",
+              "dots": 0
+            },
+            {
+              "id": "part-0-chord-1-m0-960",
+              "baseId": "part-0-chord-1",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "chord",
+              "startTicks": 960,
+              "endTicks": 1440,
+              "startMs": 1000,
+              "endMs": 1500,
+              "durationName": "quarter",
+              "dots": 0,
+              "notes": [
+                {
+                  "midi": 64,
+                  "step": "E",
+                  "alter": 0,
+                  "octave": 4,
+                  "sourceNoteId": "n1",
+                  "velocity": 0.8
+                }
+              ],
+              "sourceNoteIds": ["n1"],
+              "tieStart": false,
+              "tieStop": false
+            },
+            {
+              "id": "part-0-rest-0-0-1440-0",
+              "baseId": "part-0-rest-0-0-1440",
+              "partId": "part-0",
+              "staffIndex": 0,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "rest",
+              "startTicks": 1440,
+              "endTicks": 1920,
+              "startMs": 0,
+              "endMs": 0,
+              "durationName": "quarter",
+              "dots": 0
+            }
+          ]
+        },
+        {
+          "index": 1,
+          "clef": "bass",
+          "voiceCount": 1,
+          "events": [
+            {
+              "id": "part-0-chord-2-m0-0",
+              "baseId": "part-0-chord-2",
+              "partId": "part-0",
+              "staffIndex": 1,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "chord",
+              "startTicks": 0,
+              "endTicks": 960,
+              "startMs": 0,
+              "endMs": 1000,
+              "durationName": "half",
+              "dots": 0,
+              "notes": [
+                {
+                  "midi": 48,
+                  "step": "C",
+                  "alter": 0,
+                  "octave": 3,
+                  "sourceNoteId": "n2",
+                  "velocity": 0.8
+                }
+              ],
+              "sourceNoteIds": ["n2"],
+              "tieStart": false,
+              "tieStop": false
+            },
+            {
+              "id": "part-0-rest-1-0-960-0",
+              "baseId": "part-0-rest-1-0-960",
+              "partId": "part-0",
+              "staffIndex": 1,
+              "voiceIndex": 0,
+              "measureIndex": 0,
+              "kind": "rest",
+              "startTicks": 960,
+              "endTicks": 1920,
+              "startMs": 0,
+              "endMs": 0,
+              "durationName": "half",
+              "dots": 0
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "diagnostics": []
+}

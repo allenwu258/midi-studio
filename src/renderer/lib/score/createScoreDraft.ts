@@ -1,8 +1,9 @@
 import type { MidiNote, ParsedSong, ParsedTrack } from "../midi";
-import { durationNameFromTicks, quantizeTicks, shortestNoteTicks } from "./durations";
+import { durationNameFromTicks, shortestNoteTicks } from "./durations";
 import { createMeasureMap } from "./measureMap";
 import { assignPianoStaves } from "./pianoSplit";
 import { chooseClefForTrack, spellMidiPitch } from "./pitchSpelling";
+import { quantizeNotesWithContext } from "./quantization";
 import { spellChordIntoMeasure, spellRestIntoMeasure } from "./rhythmSpelling";
 import { assignVoices } from "./voices";
 import type {
@@ -32,7 +33,7 @@ export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDra
   const diagnostics: ScoreDiagnostic[] = [];
   const measures = createMeasureMap(song.meta, diagnostics);
   const gridTicks = shortestNoteTicks(song.meta.ppq, shortestNote);
-  const parts = createPartSources(song).map((source) => createPart(song, source, gridTicks, diagnostics));
+  const parts = createPartSources(song).map((source) => createPart(song, source, measures, gridTicks, diagnostics));
 
   if (!song.meta.keySignatures.length) {
     diagnostics.push({
@@ -63,6 +64,7 @@ export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDra
 function createPart(
   song: ParsedSong,
   source: PartSource,
+  measures: ScoreDraft["measures"],
   gridTicks: number,
   diagnostics: ScoreDiagnostic[]
 ): ScorePart {
@@ -70,7 +72,14 @@ function createPart(
   const averagePitch =
     sourceNotes.reduce((sum, note) => sum + note.midi, 0) / Math.max(1, sourceNotes.length);
   const useGrandStaff = shouldUseGrandStaff(source);
-  const baseQuantizedNotes = sourceNotes.map((note) => quantizeNote(note, gridTicks, 0));
+  const baseQuantizedNotes = quantizeNotesWithContext({
+    notes: sourceNotes,
+    measures,
+    ppq: song.meta.ppq,
+    regularGridTicks: gridTicks,
+    diagnostics,
+    trackIndex: source.tracks[0]?.index ?? 0
+  });
   const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes) : baseQuantizedNotes;
   const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
@@ -185,22 +194,6 @@ function shouldUseGrandStaff(source: PartSource): boolean {
     source.tracks.length > 1 ||
     (minPitch < GRAND_STAFF_RANGE_SPLIT_MIDI && maxPitch >= GRAND_STAFF_RANGE_SPLIT_MIDI && maxPitch - minPitch >= 18)
   );
-}
-
-function quantizeNote(note: MidiNote, gridTicks: number, staffIndex: number): QuantizedNote {
-  const quantizedStartTicks = quantizeTicks(note.startTicks, gridTicks);
-  let quantizedEndTicks = quantizeTicks(note.endTicks, gridTicks);
-
-  if (quantizedEndTicks <= quantizedStartTicks) {
-    quantizedEndTicks = quantizedStartTicks + gridTicks;
-  }
-
-  return {
-    ...note,
-    quantizedStartTicks,
-    quantizedEndTicks,
-    staffIndex
-  };
 }
 
 function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number): ScoreChord[] {
