@@ -90,6 +90,11 @@ The portable artifact is written to `release/`, which is ignored by git.
   must be loaded through `midi-studio-resource://assets/...`.
 - Do not replace bundled SF2 assets without confirming redistribution rights
   and updating README documentation.
+- Preserve the player switch order in `App`: create and load the new engine
+  first, validate the load generation/current MIDI/current player, then dispose
+  the old engine. Disposing the old player first can lose the working fallback.
+- Preserve the settings save queue in `App`; settings writes are serialized so
+  rapid slider or mode changes cannot apply older SQLite responses last.
 
 ## Frontend Rules
 
@@ -140,6 +145,11 @@ Then verify the renderer at:
 ```text
 http://127.0.0.1:5173
 ```
+
+React dev mode may remount the app under StrictMode. `App` intentionally delays
+player disposal by one task and cancels it on immediate remount, so do not
+simplify that cleanup back to unconditional dispose without checking dev audio
+loading behavior.
 
 ## Current Feature Boundary
 
