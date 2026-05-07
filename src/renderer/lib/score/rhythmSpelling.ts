@@ -1,12 +1,17 @@
 import { durationNameFromTicks } from "./durations";
+import {
+  boundariesForNoteSpelling,
+  boundariesForRestSpelling,
+  createMeterStructure,
+  isOnBeatBoundary,
+  nextBeatBoundary
+} from "./meterStructure";
 import type { ScoreChord, ScoreMeasure, ScoreRest, ScoreTimeModification } from "./types";
 
 type RhythmSegment = {
   startTicks: number;
   endTicks: number;
 };
-
-const SIMPLE_BEAT_DENOMINATORS = new Set([2, 4, 8]);
 
 export function spellChordIntoMeasure(
   chord: ScoreChord,
@@ -84,15 +89,21 @@ function splitRangeAtReadableBoundaries(
     return [];
   }
 
-  const boundaries = rhythmBoundaries(measure, ppq, kind);
-  const beatTicks = Math.max(1, Math.round((ppq * 4) / measure.denominator));
+  if (kind === "rest" && startTicks === measure.startTicks && endTicks === measure.endTicks) {
+    return [{ startTicks, endTicks }];
+  }
+
+  const meter = createMeterStructure(measure, ppq);
+  const boundaries = kind === "rest"
+    ? boundariesForRestSpelling(meter)
+    : boundariesForNoteSpelling(meter);
   const segments: RhythmSegment[] = [];
   let cursor = startTicks;
 
   while (cursor < endTicks) {
     const syncopationBoundary =
-      kind === "chord" && !isOnBeat(cursor, measure.startTicks, beatTicks)
-        ? nextBeatBoundary(cursor, measure, beatTicks)
+      kind === "chord" && !isOnBeatBoundary(cursor, meter)
+        ? nextBeatBoundary(cursor, meter)
         : null;
     const nextBoundary = [...boundaries, syncopationBoundary]
       .filter((boundary): boundary is number => boundary !== null && boundary > cursor && boundary < endTicks)
@@ -103,64 +114,4 @@ function splitRangeAtReadableBoundaries(
   }
 
   return segments;
-}
-
-function rhythmBoundaries(measure: ScoreMeasure, ppq: number, kind: "chord" | "rest"): number[] {
-  const measureTicks = measure.endTicks - measure.startTicks;
-  const beatTicks = Math.max(1, Math.round((ppq * 4) / measure.denominator));
-  const boundaries = new Set<number>();
-
-  boundaries.add(measure.startTicks);
-  boundaries.add(measure.endTicks);
-
-  if (kind === "rest") {
-    addBeatBoundaries(boundaries, measure, beatTicks);
-    return [...boundaries].sort((a, b) => a - b);
-  }
-
-  addStrongBeatBoundaries(boundaries, measure, measureTicks, beatTicks);
-
-  return [...boundaries].sort((a, b) => a - b);
-}
-
-function addBeatBoundaries(boundaries: Set<number>, measure: ScoreMeasure, beatTicks: number) {
-  for (let tick = measure.startTicks + beatTicks; tick < measure.endTicks; tick += beatTicks) {
-    boundaries.add(tick);
-  }
-}
-
-function addStrongBeatBoundaries(
-  boundaries: Set<number>,
-  measure: ScoreMeasure,
-  measureTicks: number,
-  beatTicks: number
-) {
-  if (measure.denominator === 4 && measure.numerator === 4) {
-    boundaries.add(measure.startTicks + measureTicks / 2);
-    return;
-  }
-
-  if (measure.denominator === 8 && measure.numerator % 3 === 0 && measure.numerator > 3) {
-    for (let tick = measure.startTicks + beatTicks * 3; tick < measure.endTicks; tick += beatTicks * 3) {
-      boundaries.add(tick);
-    }
-    return;
-  }
-
-  if (SIMPLE_BEAT_DENOMINATORS.has(measure.denominator)) {
-    const halfMeasure = measure.startTicks + measureTicks / 2;
-    if (Number.isInteger(halfMeasure)) {
-      boundaries.add(halfMeasure);
-    }
-  }
-}
-
-function isOnBeat(ticks: number, measureStartTicks: number, beatTicks: number): boolean {
-  return (ticks - measureStartTicks) % beatTicks === 0;
-}
-
-function nextBeatBoundary(ticks: number, measure: ScoreMeasure, beatTicks: number): number | null {
-  const beatOffset = Math.floor((ticks - measure.startTicks) / beatTicks) + 1;
-  const boundary = measure.startTicks + beatOffset * beatTicks;
-  return boundary < measure.endTicks ? boundary : null;
 }

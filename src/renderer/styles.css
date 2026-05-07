@@ -307,6 +307,10 @@ h3 {
   fill: #202d3b;
 }
 
+.score-event.rest .duration-dot {
+  fill: #9aa6b4;
+}
+
 .tie-mark {
   fill: none;
   stroke: #526171;

@@ -1,5 +1,4 @@
-import type { ScoreDurationName } from "./types";
-import type { ScoreTimeModification } from "./types";
+import type { ScoreDots, ScoreDurationName, ScoreTimeModification } from "./types";
 
 const DURATION_ORDER: Array<{ name: ScoreDurationName; quarterUnits: number }> = [
   { name: "whole", quarterUnits: 4 },
@@ -14,13 +13,13 @@ export function durationNameFromTicks(
   durationTicks: number,
   ppq: number,
   timeModification?: ScoreTimeModification
-): { name: ScoreDurationName; dots: 0 | 1 } {
+): { name: ScoreDurationName; dots: ScoreDots } {
   const normalizedTicks = timeModification
     ? durationTicks * (timeModification.actualNotes / timeModification.normalNotes)
     : durationTicks;
   const quarterUnits = Math.max(0.125, normalizedTicks / ppq);
   let best = DURATION_ORDER[DURATION_ORDER.length - 1];
-  let bestDots: 0 | 1 = 0;
+  let bestDots: ScoreDots = 0;
   let bestError = Number.POSITIVE_INFINITY;
 
   for (const duration of DURATION_ORDER) {
@@ -36,6 +35,13 @@ export function durationNameFromTicks(
       best = duration;
       bestDots = 1;
       bestError = dottedError;
+    }
+
+    const doubleDottedError = Math.abs(quarterUnits - duration.quarterUnits * 1.75);
+    if (doubleDottedError < bestError) {
+      best = duration;
+      bestDots = 2;
+      bestError = doubleDottedError;
     }
   }
 

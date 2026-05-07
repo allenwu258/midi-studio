@@ -4,6 +4,7 @@ export type {
   ScoreChord,
   ScoreDiagnostic,
   ScoreDraft,
+  ScoreDots,
   ScoreDurationName,
   ScoreEvent,
   ScoreMeasure,

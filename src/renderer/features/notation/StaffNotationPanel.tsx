@@ -319,9 +319,12 @@ function ScoreEventSvg({
 
   if (event.kind === "rest") {
     return (
-      <text className={className} x={x} y={renderEvent.restY}>
-        {restGlyph(event.durationName)}
-      </text>
+      <g className={className}>
+        <text x={x} y={renderEvent.restY}>
+          {restGlyph(event.durationName)}
+        </text>
+        <DurationDots count={event.dots} x={x + 14} y={renderEvent.restY - 8} />
+      </g>
     );
   }
 
@@ -341,7 +344,7 @@ function ScoreEventSvg({
       {event.durationName !== "whole" && !renderEvent.beamed ? (
         <Stem renderEvent={renderEvent} />
       ) : null}
-      {event.dots ? <circle className="duration-dot" cx={x + 16} cy={Math.min(...renderEvent.notes.map((note) => note.y))} r="2.2" /> : null}
+      <DurationDots count={event.dots} x={x + 16} y={Math.min(...renderEvent.notes.map((note) => note.y))} />
       {event.tieStart ? (
         <path
           className="tie-mark"
@@ -350,6 +353,20 @@ function ScoreEventSvg({
       ) : null}
       <title>{staff.clef}</title>
     </g>
+  );
+}
+
+function DurationDots({ count, x, y }: { count: ScoreEvent["dots"]; x: number; y: number }) {
+  if (!count) {
+    return null;
+  }
+
+  return (
+    <>
+      {Array.from({ length: count }).map((_, index) => (
+        <circle key={index} className="duration-dot" cx={x + index * 7} cy={y} r="2.2" />
+      ))}
+    </>
   );
 }
 

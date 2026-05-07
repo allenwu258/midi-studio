@@ -32,6 +32,7 @@ export type ScoreNote = ScorePitch & {
 };
 
 export type ScoreDurationName = "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
+export type ScoreDots = 0 | 1 | 2;
 
 export type ScoreEventBase = {
   id: string;
@@ -45,7 +46,7 @@ export type ScoreEventBase = {
   startMs: number;
   endMs: number;
   durationName: ScoreDurationName;
-  dots: 0 | 1;
+  dots: ScoreDots;
   tupletId?: string;
   timeModification?: ScoreTimeModification;
 };
