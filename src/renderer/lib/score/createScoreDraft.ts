@@ -1,8 +1,10 @@
 import type { MidiNote, ParsedSong, ParsedTrack } from "../midi";
 import { durationNameFromTicks, quantizeTicks, shortestNoteTicks } from "./durations";
 import { createMeasureMap } from "./measureMap";
+import { assignPianoStaves } from "./pianoSplit";
 import { chooseClefForTrack, spellMidiPitch } from "./pitchSpelling";
 import { spellChordIntoMeasure, spellRestIntoMeasure } from "./rhythmSpelling";
+import { assignVoices } from "./voices";
 import type {
   CreateScoreDraftInput,
   QuantizedNote,
@@ -13,10 +15,9 @@ import type {
   ScorePart
 } from "./types";
 
-const BASELINE_VOICE_LIMIT = 2;
-const GRAND_STAFF_SPLIT_MIDI = 60;
 const PIANO_PROGRAM_MIN = 0;
 const PIANO_PROGRAM_MAX = 7;
+const GRAND_STAFF_RANGE_SPLIT_MIDI = 60;
 
 type PartSource = {
   id: string;
@@ -69,9 +70,8 @@ function createPart(
   const averagePitch =
     sourceNotes.reduce((sum, note) => sum + note.midi, 0) / Math.max(1, sourceNotes.length);
   const useGrandStaff = shouldUseGrandStaff(source);
-  const quantizedNotes = sourceNotes.map((note) =>
-    quantizeNote(note, gridTicks, useGrandStaff && note.midi < GRAND_STAFF_SPLIT_MIDI ? 1 : 0)
-  );
+  const baseQuantizedNotes = sourceNotes.map((note) => quantizeNote(note, gridTicks, 0));
+  const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes) : baseQuantizedNotes;
   const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
   const trebleChords = chordEvents.filter((chord) => chord.staffIndex === 0);
@@ -183,7 +183,7 @@ function shouldUseGrandStaff(source: PartSource): boolean {
   return (
     isPianoProgram(source.program) ||
     source.tracks.length > 1 ||
-    (minPitch < GRAND_STAFF_SPLIT_MIDI && maxPitch >= GRAND_STAFF_SPLIT_MIDI && maxPitch - minPitch >= 18)
+    (minPitch < GRAND_STAFF_RANGE_SPLIT_MIDI && maxPitch >= GRAND_STAFF_RANGE_SPLIT_MIDI && maxPitch - minPitch >= 18)
   );
 }
 
@@ -247,50 +247,6 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
       } satisfies ScoreChord;
     })
     .sort((a, b) => a.startTicks - b.startTicks || a.notes[0].midi - b.notes[0].midi);
-}
-
-function assignVoices(
-  chords: ScoreChord[],
-  trackIndex: number,
-  diagnostics: ScoreDiagnostic[]
-): number {
-  const voiceEndTicks = Array.from({ length: BASELINE_VOICE_LIMIT }, () => 0);
-  let usedVoiceCount = 1;
-  let reportedLimit = false;
-
-  for (const chord of chords) {
-    let voiceIndex = voiceEndTicks.findIndex((endTicks) => endTicks <= chord.startTicks);
-
-    if (voiceIndex < 0) {
-      voiceIndex = indexOfEarliestEndingVoice(voiceEndTicks);
-      if (!reportedLimit) {
-        diagnostics.push({
-          severity: "warning",
-          code: "VOICE_LIMIT_EXCEEDED",
-          message: "检测到超过当前基础声部分离能力的复调片段，部分音符可能仍会重叠显示。",
-          trackIndex,
-          tick: chord.startTicks
-        });
-        reportedLimit = true;
-      }
-    }
-
-    chord.voiceIndex = voiceIndex;
-    voiceEndTicks[voiceIndex] = Math.max(voiceEndTicks[voiceIndex], chord.endTicks);
-    usedVoiceCount = Math.max(usedVoiceCount, voiceIndex + 1);
-  }
-
-  return usedVoiceCount;
-}
-
-function indexOfEarliestEndingVoice(voiceEndTicks: number[]): number {
-  let result = 0;
-  for (let index = 1; index < voiceEndTicks.length; index += 1) {
-    if (voiceEndTicks[index] < voiceEndTicks[result]) {
-      result = index;
-    }
-  }
-  return result;
 }
 
 function createStaffEvents(
