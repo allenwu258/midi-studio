@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from "../shared/settings";
 import { StaffNotationPanel } from "./features/notation/StaffNotationPanel";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -9,10 +9,38 @@ import type {
   PlayerLoadInput,
   PlayerSnapshot
 } from "./lib/player/types";
-import { createScoreDraft } from "./lib/score";
+import type { PlaybackMapEntry } from "./lib/playbackMap";
+import type { ScoreDraft } from "./lib/score";
+import type { RenderScore } from "./lib/staff";
 import { formatTime } from "./lib/time";
+import type { ScoreRenderRequest, ScoreRenderResponse } from "./workers/scoreRenderMessages";
 
 type AppView = "player" | "settings";
+type ScoreRenderState =
+  | {
+      status: "idle" | "rendering";
+      score: null;
+      renderScore: null;
+      playbackMap: PlaybackMapEntry[];
+      error: "";
+    }
+  | {
+      status: "ready";
+      score: ScoreDraft;
+      renderScore: RenderScore;
+      playbackMap: PlaybackMapEntry[];
+      error: "";
+    }
+  | {
+      status: "error";
+      score: null;
+      renderScore: null;
+      playbackMap: PlaybackMapEntry[];
+      error: string;
+    };
+
+const PLAYBACK_SNAPSHOT_INTERVAL_MS = 125;
+const EMPTY_PLAYBACK_MAP: PlaybackMapEntry[] = [];
 
 export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -25,6 +53,8 @@ export function App() {
   const playerModeRef = useRef(DEFAULT_SETTINGS.playbackEngineMode);
   const playerUnsubscribeRef = useRef<(() => void) | null>(null);
   const playerDisposeTimeoutRef = useRef<number | null>(null);
+  const scoreRenderWorkerRef = useRef<Worker | null>(null);
+  const scoreRenderRequestIdRef = useRef(0);
   const currentLoadInputRef = useRef<PlayerLoadInput | null>(null);
   const loadGenerationRef = useRef(0);
   const settingsRef = useRef<UserSettings>(DEFAULT_SETTINGS);
@@ -39,17 +69,22 @@ export function App() {
   const [storageInfo, setStorageInfo] = useState<SettingsStorageInfo | null>(null);
   const [settingsError, setSettingsError] = useState("");
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [scoreRenderState, setScoreRenderState] = useState<ScoreRenderState>({
+    status: "idle",
+    score: null,
+    renderScore: null,
+    playbackMap: EMPTY_PLAYBACK_MAP,
+    error: ""
+  });
 
   useEffect(() => {
     cancelPendingPlayerDispose();
-    playerUnsubscribeRef.current = playerRef.current.subscribe(setSnapshot);
+    playerUnsubscribeRef.current = playerRef.current.subscribe(commitPlayerSnapshot);
     const intervalId = window.setInterval(() => {
       const nextSnapshot = playerRef.current.getSnapshot();
 
-      setSnapshot((previousSnapshot) =>
-        areSnapshotsEqual(previousSnapshot, nextSnapshot) ? previousSnapshot : nextSnapshot
-      );
-    }, 33);
+      commitPlayerSnapshot(nextSnapshot);
+    }, PLAYBACK_SNAPSHOT_INTERVAL_MS);
 
     return () => {
       playerUnsubscribeRef.current?.();
@@ -99,8 +134,84 @@ export function App() {
     };
   }, []);
 
-  const scoreDraft = useMemo(() => {
-    return song ? createScoreDraft({ song }) : null;
+  useEffect(() => {
+    scoreRenderRequestIdRef.current += 1;
+    const requestId = scoreRenderRequestIdRef.current;
+
+    scoreRenderWorkerRef.current?.terminate();
+    scoreRenderWorkerRef.current = null;
+
+    if (!song) {
+      setScoreRenderState({
+        status: "idle",
+        score: null,
+        renderScore: null,
+        playbackMap: EMPTY_PLAYBACK_MAP,
+        error: ""
+      });
+      return;
+    }
+
+    const worker = new Worker(new URL("./workers/scoreRenderWorker.ts", import.meta.url), {
+      type: "module"
+    });
+
+    scoreRenderWorkerRef.current = worker;
+    setScoreRenderState({
+      status: "rendering",
+      score: null,
+      renderScore: null,
+      playbackMap: EMPTY_PLAYBACK_MAP,
+      error: ""
+    });
+
+    worker.onmessage = (event: MessageEvent<ScoreRenderResponse>) => {
+      if (scoreRenderRequestIdRef.current !== event.data.requestId) {
+        return;
+      }
+
+      if (event.data.status === "success") {
+        setScoreRenderState({
+          status: "ready",
+          score: event.data.score,
+          renderScore: event.data.renderScore,
+          playbackMap: event.data.playbackMap,
+          error: ""
+        });
+      } else {
+        setScoreRenderState({
+          status: "error",
+          score: null,
+          renderScore: null,
+          playbackMap: EMPTY_PLAYBACK_MAP,
+          error: event.data.message
+        });
+      }
+    };
+
+    worker.onerror = (event) => {
+      if (scoreRenderRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setScoreRenderState({
+        status: "error",
+        score: null,
+        renderScore: null,
+        playbackMap: EMPTY_PLAYBACK_MAP,
+        error: event.message || "乐谱生成线程失败。"
+      });
+    };
+
+    const request: ScoreRenderRequest = { requestId, song };
+    worker.postMessage(request);
+
+    return () => {
+      worker.terminate();
+      if (scoreRenderWorkerRef.current === worker) {
+        scoreRenderWorkerRef.current = null;
+      }
+    };
   }, [song]);
 
   const progressPercent = song?.durationMs
@@ -275,7 +386,7 @@ export function App() {
     previousPlayer.dispose();
     playerModeRef.current = mode;
     playerRef.current = nextPlayer;
-    playerUnsubscribeRef.current = nextPlayer.subscribe(setSnapshot);
+    playerUnsubscribeRef.current = nextPlayer.subscribe(commitPlayerSnapshot);
 
     if (!options.reloadCurrentSong || !loadInput) {
       return;
@@ -290,6 +401,12 @@ export function App() {
   function commitSettings(nextSettings: UserSettings) {
     settingsRef.current = nextSettings;
     setSettings(nextSettings);
+  }
+
+  function commitPlayerSnapshot(nextSnapshot: PlayerSnapshot) {
+    setSnapshot((previousSnapshot) =>
+      shouldCommitPlayerSnapshot(previousSnapshot, nextSnapshot) ? nextSnapshot : previousSnapshot
+    );
   }
 
   function cancelPendingPlayerDispose() {
@@ -396,8 +513,12 @@ export function App() {
             <section className="notation-panel" aria-label="五线谱">
               {song ? (
                 <StaffNotationPanel
+                  isRendering={scoreRenderState.status === "rendering"}
                   positionMs={snapshot.positionMs}
-                  score={scoreDraft}
+                  playbackMap={scoreRenderState.playbackMap}
+                  renderError={scoreRenderState.error}
+                  renderScore={scoreRenderState.renderScore}
+                  score={scoreRenderState.score}
                   onSeek={seekTo}
                 />
               ) : (
@@ -473,6 +594,23 @@ function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean
     left.durationMs === right.durationMs &&
     Math.round(left.positionMs) === Math.round(right.positionMs)
   );
+}
+
+function shouldCommitPlayerSnapshot(left: PlayerSnapshot, right: PlayerSnapshot): boolean {
+  if (
+    left.status !== right.status ||
+    left.durationMs !== right.durationMs ||
+    left.loadingMessage !== right.loadingMessage ||
+    left.error !== right.error
+  ) {
+    return true;
+  }
+
+  if (right.status !== "playing") {
+    return !areSnapshotsEqual(left, right);
+  }
+
+  return Math.abs(right.positionMs - left.positionMs) >= PLAYBACK_SNAPSHOT_INTERVAL_MS;
 }
 
 function formatPlayerStatus(snapshot: PlayerSnapshot): string {

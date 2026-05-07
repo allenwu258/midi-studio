@@ -333,26 +333,30 @@ h3 {
   text-anchor: middle;
 }
 
-.score-event.active .note-head {
+.active-score-overlay {
+  pointer-events: none;
+}
+
+.active-score-overlay .note-head {
   fill: #087c73;
   stroke: #065f57;
 }
 
-.score-event.active .note-stem,
-.score-event.active .tie-mark {
+.active-score-overlay .note-stem,
+.active-score-overlay .tie-mark {
   stroke: #087c73;
 }
 
-.beam-group.active .beam-line,
-.beam-group.active .note-stem {
+.active-score-overlay .beam-line,
+.active-score-overlay .note-stem {
   stroke: #087c73;
 }
 
-.tuplet-mark.active path {
+.active-score-overlay .tuplet-mark path {
   stroke: #087c73;
 }
 
-.tuplet-mark.active text {
+.active-score-overlay .tuplet-mark text {
   fill: #087c73;
 }
 

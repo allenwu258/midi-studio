@@ -9,13 +9,13 @@ export function findActiveScorePosition(
   let activeMeasureIndex = -1;
   const endIndex = findLastStartedEntry(entries, positionMs);
 
-  for (let index = 0; index <= endIndex; index += 1) {
+  for (let index = endIndex; index >= 0; index -= 1) {
     const entry = entries[index];
 
     if (positionMs <= Math.max(entry.endMs, entry.startMs + 120)) {
       activeIds.add(entry.elementId);
       activeMeasureIndex = activeMeasureIndex < 0 ? entry.measureIndex : Math.min(activeMeasureIndex, entry.measureIndex);
-    } else if (entry.endMs < positionMs) {
+    } else if (pastMeasureIndex < 0 && entry.endMs < positionMs) {
       pastMeasureIndex = Math.max(pastMeasureIndex, entry.measureIndex);
     }
   }

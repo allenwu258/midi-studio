@@ -23,6 +23,7 @@ export type ScorePitch = {
   midi: number;
   step: "C" | "D" | "E" | "F" | "G" | "A" | "B";
   alter: -1 | 0 | 1;
+  accidental?: -1 | 0 | 1;
   octave: number;
 };
 

@@ -9,7 +9,7 @@ export type RenderBox = {
   height: number;
 };
 
-export type RenderGlyphLayer = "accidental" | "notehead" | "rest" | "tie";
+export type RenderGlyphLayer = "accidental" | "notehead" | "rest" | "dot" | "stem" | "tie";
 
 export type RenderGlyphBox = RenderBox & {
   layer: RenderGlyphLayer;

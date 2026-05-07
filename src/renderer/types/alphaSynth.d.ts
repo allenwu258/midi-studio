@@ -52,6 +52,7 @@ declare global {
         None: number;
       };
       PlayerOutputMode: {
+        WebAudioAudioWorklets: number;
         WebAudioScriptProcessor: number;
       };
     };

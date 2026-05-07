@@ -1,6 +1,7 @@
 import type { ScoreChord, ScoreDraft, ScoreEvent, ScoreMeasure } from "../score";
 import type { RenderLayoutOptions, RenderMeasure, RenderMeasureSpacing, RenderTimeSlice } from "./types";
 import { beamCount } from "./beams";
+import { glyphProfileForEvent } from "./glyphMetrics";
 
 type SliceProfile = {
   ticks: number;
@@ -228,38 +229,22 @@ function createMinimumSlices(profiles: SliceProfile[], measure: ScoreMeasure, pp
 
 function eventGlyphProfile(event: ScoreEvent): Omit<SliceProfile, "ticks"> {
   if (event.kind === "rest") {
+    const profile = glyphProfileForEvent(event);
     return {
-      minLeft: 9,
-      minRight: 14 + event.dots * 7,
+      minLeft: profile.minLeft,
+      minRight: profile.minRight,
       rhythmicWeight: 0.9
     };
   }
 
-  const accidentalCount = event.notes.filter((note) => note.alter !== 0).length;
-  const closeIntervals = countCloseChordIntervals(event);
-  const dotWidth = event.dots * 7;
-  const tieWidth = event.tieStart ? 105 : 0;
+  const profile = glyphProfileForEvent(event);
   const beamWeight = beamCount(event.durationName) > 0 ? 1.18 : 1;
 
   return {
-    minLeft: 14 + accidentalCount * 9 + closeIntervals * 5,
-    minRight: 18 + dotWidth + tieWidth + closeIntervals * 5,
+    minLeft: profile.minLeft,
+    minRight: profile.minRight,
     rhythmicWeight: beamWeight
   };
-}
-
-function countCloseChordIntervals(event: ScoreChord): number {
-  const sorted = [...event.notes].sort((a, b) => a.midi - b.midi);
-  let count = 0;
-
-  for (let index = 1; index < sorted.length; index += 1) {
-    const distance = Math.abs(sorted[index].midi - sorted[index - 1].midi);
-    if (distance <= 2) {
-      count += 1;
-    }
-  }
-
-  return count;
 }
 
 function measureWeight(score: ScoreDraft, measure: ScoreMeasure, offset: number): number {

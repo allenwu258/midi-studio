@@ -159,7 +159,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     settings.soundFont = SOUNDFONT_URL;
     settings.bufferTimeInMilliseconds = 1000;
     settings.logLevel = window.alphaSynth.LogLevel.None;
-    settings.outputMode = window.alphaSynth.PlayerOutputMode.WebAudioScriptProcessor;
+    settings.outputMode = getPreferredAlphaSynthOutputMode();
 
     const synth = new window.alphaSynth.AlphaSynthApi(settings);
     this.synth = synth;
@@ -354,6 +354,21 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       listener(this.snapshot);
     }
   }
+}
+
+function getPreferredAlphaSynthOutputMode(): number {
+  const outputModes = window.alphaSynth?.PlayerOutputMode;
+
+  if (
+    outputModes &&
+    window.isSecureContext &&
+    "AudioWorkletNode" in window &&
+    typeof outputModes.WebAudioAudioWorklets === "number"
+  ) {
+    return outputModes.WebAudioAudioWorklets;
+  }
+
+  return outputModes?.WebAudioScriptProcessor ?? 1;
 }
 
 function loadAlphaSynthScript(): Promise<void> {

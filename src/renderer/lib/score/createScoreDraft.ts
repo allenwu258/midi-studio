@@ -2,7 +2,7 @@ import type { MidiNote, ParsedSong, ParsedTrack } from "../midi";
 import { durationNameFromTicks, shortestNoteTicks } from "./durations";
 import { createMeasureMap } from "./measureMap";
 import { assignPianoStaves } from "./pianoSplit";
-import { chooseClefForTrack, spellMidiPitch } from "./pitchSpelling";
+import { chooseClefForTrack, createPitchSpellings } from "./pitchSpelling";
 import { quantizeNotesWithContext } from "./quantization";
 import { spellChordIntoMeasure, spellRestIntoMeasure } from "./rhythmSpelling";
 import { assignVoices } from "./voices";
@@ -13,6 +13,7 @@ import type {
   ScoreDiagnostic,
   ScoreDraft,
   ScoreEvent,
+  ScorePitch,
   ScorePart,
   ScoreTuplet
 } from "./types";
@@ -99,7 +100,8 @@ function createPart(
   });
   const baseQuantizedNotes = quantized.notes;
   const quantizedNotes = useGrandStaff ? assignPianoStaves(baseQuantizedNotes, measures) : baseQuantizedNotes;
-  const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
+  const pitchSpellings = createPitchSpellings(quantizedNotes, measures, song.meta.keySignatures);
+  const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq, pitchSpellings);
   const firstTrackIndex = source.tracks[0]?.index ?? 0;
   const trebleChords = chordEvents.filter((chord) => chord.staffIndex === 0);
   const bassChords = chordEvents.filter((chord) => chord.staffIndex === 1);
@@ -218,7 +220,12 @@ function shouldUseGrandStaff(source: PartSource): boolean {
   );
 }
 
-function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number): ScoreChord[] {
+function createChordEvents(
+  partId: string,
+  notes: QuantizedNote[],
+  ppq: number,
+  pitchSpellings: Map<string, ScorePitch>
+): ScoreChord[] {
   const grouped = new Map<string, QuantizedNote[]>();
 
   for (const note of notes) {
@@ -256,7 +263,12 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
         notes: group
           .sort((a, b) => a.midi - b.midi)
           .map((note) => ({
-            ...spellMidiPitch(note.midi),
+            ...(pitchSpellings.get(note.id) ?? {
+              midi: note.midi,
+              step: "C" as const,
+              alter: 0 as const,
+              octave: Math.floor(note.midi / 12) - 1
+            }),
             sourceNoteId: note.id,
             velocity: note.velocity
           })),

@@ -1,9 +1,8 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { ScoreDraft, ScoreEvent, ScoreStaff } from "../../lib/score";
 import { accidentalText } from "../../lib/score/pitchSpelling";
 import {
   DEFAULT_RENDER_LAYOUT_OPTIONS,
-  layoutScore,
   type RenderBeamGroup,
   type RenderBeamPoint,
   type RenderEvent,
@@ -15,12 +14,16 @@ import {
   type RenderTuplet
 } from "../../lib/staff";
 import {
-  buildPlaybackMap,
   findActiveScorePosition,
-  findSeekPositionForElement
+  findSeekPositionForElement,
+  type PlaybackMapEntry
 } from "../../lib/playbackMap";
 
 type StaffNotationPanelProps = {
+  isRendering: boolean;
+  playbackMap: PlaybackMapEntry[];
+  renderError: string;
+  renderScore: RenderScore | null;
   score: ScoreDraft | null;
   positionMs: number;
   onSeek: (positionMs: number) => void;
@@ -28,17 +31,51 @@ type StaffNotationPanelProps = {
 
 const LINE_GAP = DEFAULT_RENDER_LAYOUT_OPTIONS.lineGap;
 
+type ActiveRenderEvent = {
+  event: RenderEvent;
+  beams: RenderBeamGroup[];
+  tuplets: RenderTuplet[];
+};
+
 export function StaffNotationPanel({
+  isRendering,
+  playbackMap,
+  renderError,
+  renderScore,
   score,
   positionMs,
   onSeek
 }: StaffNotationPanelProps) {
-  const playbackMap = useMemo(() => (score ? buildPlaybackMap(score) : []), [score]);
-  const renderScore = useMemo(() => (score ? layoutScore(score) : null), [score]);
+  const activeEventIndex = useMemo(
+    () => (renderScore ? buildActiveEventIndex(renderScore) : new Map<string, ActiveRenderEvent>()),
+    [renderScore]
+  );
   const activePosition = useMemo(
     () => findActiveScorePosition(playbackMap, positionMs),
     [playbackMap, positionMs]
   );
+  const activeEvents = useMemo(
+    () => Array.from(activePosition.activeIds, (id) => activeEventIndex.get(id)).filter(isActiveRenderEvent),
+    [activeEventIndex, activePosition.activeIds]
+  );
+
+  if (renderError) {
+    return (
+      <div className="empty-state">
+        <strong>乐谱生成失败</strong>
+        <span>{renderError}</span>
+      </div>
+    );
+  }
+
+  if (isRendering) {
+    return (
+      <div className="empty-state">
+        <strong>乐谱生成中</strong>
+        <span>播放线程保持独立运行</span>
+      </div>
+    );
+  }
 
   if (!score || !renderScore) {
     return (
@@ -74,14 +111,8 @@ export function StaffNotationPanel({
         onClick={handleScoreClick}
       >
         <title>{score.title}</title>
-        {renderScore.systems.map((system) => (
-          <StaffSystemSvg
-            key={system.index}
-            activeIds={activePosition.activeIds}
-            renderScore={renderScore}
-            system={system}
-          />
-        ))}
+        <StaticScoreSvg renderScore={renderScore} />
+        <ActiveScoreOverlay activeEvents={activeEvents} />
       </svg>
       {score.diagnostics.length ? (
         <div className="score-diagnostics" aria-label="导入诊断">
@@ -96,21 +127,154 @@ export function StaffNotationPanel({
   );
 }
 
+function buildActiveEventIndex(renderScore: RenderScore): Map<string, ActiveRenderEvent> {
+  const index = new Map<string, ActiveRenderEvent>();
+  const beamsByEventId = new Map<string, RenderBeamGroup[]>();
+  const tupletsByEventId = new Map<string, RenderTuplet[]>();
+
+  for (const system of renderScore.systems) {
+    for (const part of system.parts) {
+      for (const staff of part.staves) {
+        for (const beam of staff.beams) {
+          for (const eventId of beam.eventIds) {
+            const beams = beamsByEventId.get(eventId);
+            if (beams) {
+              beams.push(beam);
+            } else {
+              beamsByEventId.set(eventId, [beam]);
+            }
+          }
+        }
+
+        for (const tuplet of staff.tuplets) {
+          for (const eventId of tuplet.eventIds) {
+            const tuplets = tupletsByEventId.get(eventId);
+            if (tuplets) {
+              tuplets.push(tuplet);
+            } else {
+              tupletsByEventId.set(eventId, [tuplet]);
+            }
+          }
+        }
+
+        for (const event of staff.events) {
+          if (event.event.kind === "rest") {
+            continue;
+          }
+
+          index.set(event.event.id, {
+            event,
+            beams: beamsByEventId.get(event.event.id) ?? [],
+            tuplets: tupletsByEventId.get(event.event.id) ?? []
+          });
+        }
+      }
+    }
+  }
+
+  return index;
+}
+
+function isActiveRenderEvent(event: ActiveRenderEvent | undefined): event is ActiveRenderEvent {
+  return Boolean(event);
+}
+
+function ActiveScoreOverlay({ activeEvents }: { activeEvents: ActiveRenderEvent[] }) {
+  const beams = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.beams));
+  const tuplets = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.tuplets));
+
+  if (!activeEvents.length) {
+    return null;
+  }
+
+  return (
+    <g className="active-score-overlay" aria-hidden="true">
+      {beams.map((beam) => (
+        <BeamGroupSvg key={beam.id} beam={beam} />
+      ))}
+      {tuplets.map((tuplet) => (
+        <TupletSvg key={tuplet.id} tuplet={tuplet} />
+      ))}
+      {activeEvents.map((activeEvent) => (
+        <ActiveEventSvg key={activeEvent.event.event.id} renderEvent={activeEvent.event} />
+      ))}
+    </g>
+  );
+}
+
+function ActiveEventSvg({ renderEvent }: { renderEvent: RenderEvent }) {
+  if (renderEvent.event.kind === "rest") {
+    return null;
+  }
+
+  return (
+    <g className="active-score-event">
+      {renderEvent.notes.map((note) => (
+        <ellipse
+          key={`${renderEvent.event.id}-${note.note.sourceNoteId}`}
+          className="note-head"
+          cx={note.noteHeadX}
+          cy={note.y}
+          rx="8.5"
+          ry="6"
+          transform={`rotate(-18 ${note.noteHeadX} ${note.y})`}
+        />
+      ))}
+      {renderEvent.event.durationName !== "whole" && !renderEvent.beamed ? (
+        <Stem renderEvent={renderEvent} />
+      ) : null}
+      {renderEvent.event.tieStart ? (
+        <path
+          className="tie-mark"
+          d={`M ${renderEvent.x - 5} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 14} C ${renderEvent.x + 28} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 28}, ${renderEvent.x + 68} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 28}, ${renderEvent.x + 100} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 14}`}
+        />
+      ) : null}
+    </g>
+  );
+}
+
+function uniqueById<T extends { id: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const uniqueItems: T[] = [];
+
+  for (const item of items) {
+    if (seen.has(item.id)) {
+      continue;
+    }
+
+    seen.add(item.id);
+    uniqueItems.push(item);
+  }
+
+  return uniqueItems;
+}
+
+const StaticScoreSvg = memo(function StaticScoreSvg({ renderScore }: { renderScore: RenderScore }) {
+  return (
+    <>
+      {renderScore.systems.map((system) => (
+        <StaffSystemSvg
+          key={system.index}
+          renderScore={renderScore}
+          system={system}
+        />
+      ))}
+    </>
+  );
+});
+
 function StaffSystemSvg({
   renderScore,
-  system,
-  activeIds
+  system
 }: {
   renderScore: RenderScore;
   system: RenderSystem;
-  activeIds: Set<string>;
 }) {
   return (
     <g className="staff-system">
       {system.parts.map((part) => (
         <PartSystemSvg
           key={`${system.index}-${part.part.id}`}
-          activeIds={activeIds}
           part={part}
           renderScore={renderScore}
           showName={system.index === 0}
@@ -122,13 +286,11 @@ function StaffSystemSvg({
 }
 
 function PartSystemSvg({
-  activeIds,
   part,
   renderScore,
   showName,
   system
 }: {
-  activeIds: Set<string>;
   part: RenderPart;
   renderScore: RenderScore;
   showName: boolean;
@@ -150,7 +312,6 @@ function PartSystemSvg({
       {part.staves.map((staff) => (
         <StaffSvg
           key={`${part.part.id}-${staff.staff.index}`}
-          activeIds={activeIds}
           renderScore={renderScore}
           staff={staff}
           system={system}
@@ -161,12 +322,10 @@ function PartSystemSvg({
 }
 
 function StaffSvg({
-  activeIds,
   renderScore,
   staff,
   system
 }: {
-  activeIds: Set<string>;
   renderScore: RenderScore;
   staff: RenderStaff;
   system: RenderSystem;
@@ -185,7 +344,6 @@ function StaffSvg({
       {staff.events.map((event) => (
         <ScoreEventSvg
           key={event.event.id}
-          active={activeIds.has(event.event.id)}
           renderEvent={event}
           staff={staff.staff}
         />
@@ -193,14 +351,12 @@ function StaffSvg({
       {staff.beams.map((beam) => (
         <BeamGroupSvg
           key={beam.id}
-          active={beam.eventIds.some((id) => activeIds.has(id))}
           beam={beam}
         />
       ))}
       {staff.tuplets.map((tuplet) => (
         <TupletSvg
           key={tuplet.id}
-          active={tuplet.eventIds.some((id) => activeIds.has(id))}
           tuplet={tuplet}
         />
       ))}
@@ -307,15 +463,13 @@ function TimeSignatureGlyph({
 
 function ScoreEventSvg({
   renderEvent,
-  staff,
-  active
+  staff
 }: {
   renderEvent: RenderEvent;
   staff: ScoreStaff;
-  active: boolean;
 }) {
   const { event, x } = renderEvent;
-  const className = `score-event ${event.kind}${active ? " active" : ""}`;
+  const className = `score-event ${event.kind}`;
 
   if (event.kind === "rest") {
     return (
@@ -333,9 +487,9 @@ function ScoreEventSvg({
       {renderEvent.notes.map((note) => (
         <g key={`${event.id}-${note.note.sourceNoteId}`}>
           <LedgerLines x={note.noteHeadX} lines={note.ledgerLines} />
-          {note.note.alter ? (
+          {note.note.accidental !== undefined ? (
             <text className="accidental" x={note.accidentalX} y={note.y + 4}>
-              {accidentalText(note.note.alter)}
+              {accidentalText(note.note.accidental)}
             </text>
           ) : null}
           <ellipse
@@ -389,9 +543,9 @@ function Stem({ renderEvent }: { renderEvent: RenderEvent }) {
   return <line className="note-stem" x1={x + 7} x2={x + 7} y1={y - 2} y2={y - 42} />;
 }
 
-function BeamGroupSvg({ beam, active }: { beam: RenderBeamGroup; active: boolean }) {
+function BeamGroupSvg({ beam }: { beam: RenderBeamGroup }) {
   return (
-    <g className={`beam-group${active ? " active" : ""}`}>
+    <g className="beam-group">
       {beam.points.map((point) => (
         <line
           key={`${point.eventId}-stem`}
@@ -414,10 +568,10 @@ function BeamGroupSvg({ beam, active }: { beam: RenderBeamGroup; active: boolean
   );
 }
 
-function TupletSvg({ tuplet, active }: { tuplet: RenderTuplet; active: boolean }) {
+function TupletSvg({ tuplet }: { tuplet: RenderTuplet }) {
   const hook = tuplet.direction === "up" ? 6 : -6;
   return (
-    <g className={`tuplet-mark${active ? " active" : ""}`}>
+    <g className="tuplet-mark">
       <path
         d={`M ${tuplet.x1} ${tuplet.bracketY + hook} L ${tuplet.x1} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY + hook}`}
       />
