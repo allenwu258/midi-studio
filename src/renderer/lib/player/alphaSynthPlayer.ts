@@ -10,8 +10,11 @@ const RESOURCE_BASE_URL = "midi-studio-resource://assets";
 const SOUNDFONT_URL = `${RESOURCE_BASE_URL}/soundfonts/midiSound-2025-1-14.sf2`;
 const ALPHASYNTH_SCRIPT_URL = `${RESOURCE_BASE_URL}/vendor/alphasynth/alphaSynth.min.js`;
 const ALPHASYNTH_SCRIPT_SELECTOR = `script[data-midi-studio-alphasynth="true"]`;
+const ALPHASYNTH_WORKLET_READY_TIMEOUT_MS = 5000;
 
 let alphaSynthScriptPromise: Promise<void> | null = null;
+
+type AlphaSynthOutputMode = "audio-worklet" | "script-processor";
 
 export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private synth: AlphaSynthApi | null = null;
@@ -19,6 +22,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private soundFontReady = false;
   private soundFontError: Error | null = null;
   private soundFontTimeoutId = 0;
+  private synthReadyTimeoutId = 0;
   private midiReady = false;
   private disposed = false;
   private speed = 1;
@@ -155,18 +159,44 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       return;
     }
 
+    let lastError: unknown = null;
+
+    for (const outputMode of getAlphaSynthOutputModeAttempts()) {
+      try {
+        this.createAlphaSynthApi(outputMode);
+        return;
+      } catch (error) {
+        lastError = error;
+        this.destroySynth();
+      }
+    }
+
+    this.setError(
+      lastError instanceof Error
+        ? `alphaSynth 初始化失败：${lastError.message}`
+        : "alphaSynth 初始化失败。"
+    );
+  }
+
+  private createAlphaSynthApi(outputMode: AlphaSynthOutputMode): AlphaSynthApi {
+    if (!window.alphaSynth) {
+      throw new Error("alphaSynth 未加载。");
+    }
+
     const settings = new window.alphaSynth.Settings();
     settings.soundFont = SOUNDFONT_URL;
     settings.bufferTimeInMilliseconds = 1000;
     settings.logLevel = window.alphaSynth.LogLevel.None;
-    settings.outputMode = getPreferredAlphaSynthOutputMode();
+    settings.outputMode = getAlphaSynthOutputModeValue(outputMode);
 
     const synth = new window.alphaSynth.AlphaSynthApi(settings);
     this.synth = synth;
+    this.startSynthReadyFallbackTimeout(synth, outputMode);
     synth.ready.on(() => {
       if (this.disposed || this.synth !== synth) {
         return;
       }
+      this.clearSynthReadyTimeout();
       synth.setMasterVolume(this.masterVolume);
       this.startSoundFontTimeout();
     });
@@ -234,6 +264,8 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         positionMs: this.snapshot.durationMs
       });
     });
+
+    return synth;
   }
 
   private loadMidiIfPossible(loadId = this.pendingLoad?.loadId): void {
@@ -275,6 +307,42 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     if (this.soundFontTimeoutId) {
       window.clearTimeout(this.soundFontTimeoutId);
       this.soundFontTimeoutId = 0;
+    }
+  }
+
+  private startSynthReadyFallbackTimeout(
+    synth: AlphaSynthApi,
+    outputMode: AlphaSynthOutputMode
+  ): void {
+    this.clearSynthReadyTimeout();
+
+    if (outputMode !== "audio-worklet") {
+      return;
+    }
+
+    this.synthReadyTimeoutId = window.setTimeout(() => {
+      if (this.disposed || this.synth !== synth || this.soundFontReady) {
+        return;
+      }
+
+      this.destroySynth();
+
+      try {
+        this.createAlphaSynthApi("script-processor");
+      } catch (error) {
+        this.setError(
+          error instanceof Error
+            ? `alphaSynth 回退到 ScriptProcessor 失败：${error.message}`
+            : "alphaSynth 回退到 ScriptProcessor 失败。"
+        );
+      }
+    }, ALPHASYNTH_WORKLET_READY_TIMEOUT_MS);
+  }
+
+  private clearSynthReadyTimeout(): void {
+    if (this.synthReadyTimeoutId) {
+      window.clearTimeout(this.synthReadyTimeoutId);
+      this.synthReadyTimeoutId = 0;
     }
   }
 
@@ -321,6 +389,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   }
 
   private destroySynth(): void {
+    this.clearSynthReadyTimeout();
     this.clearSoundFontTimeout();
     try {
       this.synth?.pause();
@@ -356,7 +425,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   }
 }
 
-function getPreferredAlphaSynthOutputMode(): number {
+function getAlphaSynthOutputModeAttempts(): AlphaSynthOutputMode[] {
   const outputModes = window.alphaSynth?.PlayerOutputMode;
 
   if (
@@ -365,7 +434,17 @@ function getPreferredAlphaSynthOutputMode(): number {
     "AudioWorkletNode" in window &&
     typeof outputModes.WebAudioAudioWorklets === "number"
   ) {
-    return outputModes.WebAudioAudioWorklets;
+    return ["audio-worklet", "script-processor"];
+  }
+
+  return ["script-processor"];
+}
+
+function getAlphaSynthOutputModeValue(outputMode: AlphaSynthOutputMode): number {
+  const outputModes = window.alphaSynth?.PlayerOutputMode;
+
+  if (outputMode === "audio-worklet") {
+    return outputModes?.WebAudioAudioWorklets ?? 0;
   }
 
   return outputModes?.WebAudioScriptProcessor ?? 1;

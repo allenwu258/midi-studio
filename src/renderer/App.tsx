@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from "../shared/settings";
 import { StaffNotationPanel } from "./features/notation/StaffNotationPanel";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { parseMidiFile, type ParsedSong } from "./lib/midi";
+import type { ParsedSong } from "./lib/midi";
 import { createPlayer } from "./lib/player/createPlayer";
 import type {
   MidiPlaybackEngine,
@@ -13,6 +13,7 @@ import type { PlaybackMapEntry } from "./lib/playbackMap";
 import type { ScoreDraft } from "./lib/score";
 import type { RenderScore } from "./lib/staff";
 import { formatTime } from "./lib/time";
+import type { MidiParseRequest, MidiParseResponse } from "./workers/midiParseMessages";
 import type { ScoreRenderRequest, ScoreRenderResponse } from "./workers/scoreRenderMessages";
 
 type AppView = "player" | "settings";
@@ -224,23 +225,27 @@ export function App() {
       return;
     }
 
-    let loadGeneration = loadGenerationRef.current;
+    const loadGeneration = loadGenerationRef.current + 1;
     let loadingPlayer = playerRef.current;
 
     try {
       setError("");
+      loadGenerationRef.current = loadGeneration;
       const buffer = await file.arrayBuffer();
       const midiBytes = buffer.slice(0);
-      const parsedSong = parseMidiFile(buffer, file.name);
+      const parsedSong = await parseMidiInWorker(buffer, file.name, loadGeneration);
+
+      if (loadGenerationRef.current !== loadGeneration) {
+        return;
+      }
+
       const loadInput = {
         midiBytes,
         notes: parsedSong.notes,
         durationMs: parsedSong.durationMs
       };
 
-      loadGeneration = loadGenerationRef.current + 1;
       loadingPlayer = playerRef.current;
-      loadGenerationRef.current = loadGeneration;
       currentLoadInputRef.current = loadInput;
       setSong(parsedSong);
       loadingPlayer.setMasterVolume(settings.masterVolumePercent);
@@ -586,6 +591,45 @@ export function App() {
       )}
     </main>
   );
+}
+
+function parseMidiInWorker(
+  buffer: ArrayBuffer,
+  fileName: string,
+  requestId: number
+): Promise<ParsedSong> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./workers/midiParseWorker.ts", import.meta.url), {
+      type: "module"
+    });
+
+    function cleanup() {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    }
+
+    worker.onmessage = (event: MessageEvent<MidiParseResponse>) => {
+      if (event.data.requestId !== requestId) {
+        return;
+      }
+
+      cleanup();
+      if (event.data.status === "success") {
+        resolve(event.data.song);
+      } else {
+        reject(new Error(event.data.message));
+      }
+    };
+
+    worker.onerror = (event) => {
+      cleanup();
+      reject(new Error(event.message || "MIDI 解析线程失败。"));
+    };
+
+    const request: MidiParseRequest = { requestId, buffer, fileName };
+    worker.postMessage(request, [buffer]);
+  });
 }
 
 function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean {
