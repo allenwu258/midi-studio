@@ -35,6 +35,7 @@ export type ScoreDurationName = "whole" | "half" | "quarter" | "eighth" | "16th"
 
 export type ScoreEventBase = {
   id: string;
+  baseId: string;
   partId: string;
   staffIndex: number;
   voiceIndex: number;

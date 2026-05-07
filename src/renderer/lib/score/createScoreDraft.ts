@@ -2,6 +2,7 @@ import type { MidiNote, ParsedSong, ParsedTrack } from "../midi";
 import { durationNameFromTicks, quantizeTicks, shortestNoteTicks } from "./durations";
 import { createMeasureMap } from "./measureMap";
 import { chooseClefForTrack, spellMidiPitch } from "./pitchSpelling";
+import { spellChordIntoMeasure, spellRestIntoMeasure } from "./rhythmSpelling";
 import type {
   CreateScoreDraftInput,
   QuantizedNote,
@@ -9,8 +10,7 @@ import type {
   ScoreDiagnostic,
   ScoreDraft,
   ScoreEvent,
-  ScorePart,
-  ScoreRest
+  ScorePart
 } from "./types";
 
 const BASELINE_VOICE_LIMIT = 2;
@@ -218,9 +218,11 @@ function createChordEvents(partId: string, notes: QuantizedNote[], ppq: number):
       const staffIndex = Number(staffIndexText);
       const endTicks = Number(endTickText);
       const duration = durationNameFromTicks(endTicks - startTicks, ppq);
+      const baseId = `${partId}-chord-${index}-${startTicks}`;
 
       return {
-        id: `${partId}-chord-${index}-${startTicks}`,
+        id: baseId,
+        baseId,
         partId,
         staffIndex,
         voiceIndex: 0,
@@ -311,79 +313,25 @@ function createStaffEvents(
             chord.startTicks < measure.endTicks &&
             chord.endTicks > measure.startTicks
         )
-        .map((chord) => clipChordToMeasure(chord, measure.index, measure.startTicks, measure.endTicks, ppq))
         .sort((a, b) => a.startTicks - b.startTicks);
 
       let cursor = measure.startTicks;
       for (const chord of measureChords) {
-        if (chord.startTicks > cursor) {
-          events.push(createRest(partId, staffIndex, voiceIndex, measure.index, cursor, chord.startTicks, ppq));
+        const chordStart = Math.max(chord.startTicks, measure.startTicks);
+        const chordEnd = Math.min(chord.endTicks, measure.endTicks);
+
+        if (chordStart > cursor) {
+          events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, chordStart, ppq));
         }
-        events.push(chord);
-        cursor = Math.max(cursor, chord.endTicks);
+        events.push(...spellChordIntoMeasure(chord, measure, ppq));
+        cursor = Math.max(cursor, chordEnd);
       }
 
       if (cursor < measure.endTicks) {
-        events.push(createRest(partId, staffIndex, voiceIndex, measure.index, cursor, measure.endTicks, ppq));
+        events.push(...spellRestIntoMeasure(partId, staffIndex, voiceIndex, measure, cursor, measure.endTicks, ppq));
       }
     }
   }
 
   return events;
-}
-
-function clipChordToMeasure(
-  chord: ScoreChord,
-  measureIndex: number,
-  measureStartTicks: number,
-  measureEndTicks: number,
-  ppq: number
-): ScoreChord {
-  const startTicks = Math.max(chord.startTicks, measureStartTicks);
-  const endTicks = Math.min(chord.endTicks, measureEndTicks);
-  const duration = durationNameFromTicks(endTicks - startTicks, ppq);
-  const ratioStart = (startTicks - chord.startTicks) / Math.max(1, chord.endTicks - chord.startTicks);
-  const ratioEnd = (endTicks - chord.startTicks) / Math.max(1, chord.endTicks - chord.startTicks);
-  const msRange = chord.endMs - chord.startMs;
-
-  return {
-    ...chord,
-    id: `${chord.id}-m${measureIndex}-${startTicks}`,
-    measureIndex,
-    startTicks,
-    endTicks,
-    startMs: chord.startMs + msRange * ratioStart,
-    endMs: chord.startMs + msRange * ratioEnd,
-    durationName: duration.name,
-    dots: duration.dots,
-    tieStop: startTicks > chord.startTicks,
-    tieStart: endTicks < chord.endTicks
-  };
-}
-
-function createRest(
-  partId: string,
-  staffIndex: number,
-  voiceIndex: number,
-  measureIndex: number,
-  startTicks: number,
-  endTicks: number,
-  ppq: number
-): ScoreRest {
-  const duration = durationNameFromTicks(endTicks - startTicks, ppq);
-
-  return {
-    id: `${partId}-rest-${staffIndex}-${measureIndex}-${startTicks}`,
-    partId,
-    staffIndex,
-    voiceIndex,
-    measureIndex,
-    kind: "rest",
-    startTicks,
-    endTicks,
-    startMs: 0,
-    endMs: 0,
-    durationName: duration.name,
-    dots: duration.dots
-  };
 }
