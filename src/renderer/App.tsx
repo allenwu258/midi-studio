@@ -22,7 +22,9 @@ type PlaybackRuntimeDiagnostics = {
   longTaskCount: number;
   longestLongTaskMs: number;
   midiParseWorkerMs?: number;
+  midiParseError?: string;
   scoreRenderWorkerMs?: number;
+  scoreRenderError?: string;
   snapshotCommitCount: number;
   overlayUpdateCount: number;
   overlayLookupMs?: number;
@@ -234,33 +236,37 @@ export function App() {
     });
 
     worker.onmessage = (event: MessageEvent<ScoreRenderResponse>) => {
-      if (scoreRenderRequestIdRef.current !== event.data.requestId) {
+      const response = event.data;
+
+      if (scoreRenderRequestIdRef.current !== response.requestId) {
         return;
       }
 
-      if (event.data.status === "success") {
+      if (response.status === "success") {
         setRuntimeDiagnostics((previousDiagnostics) => ({
           ...previousDiagnostics,
-          scoreRenderWorkerMs: event.data.durationMs
+          scoreRenderWorkerMs: response.durationMs,
+          scoreRenderError: undefined
         }));
         setScoreRenderState({
           status: "ready",
-          score: event.data.score,
-          renderScore: event.data.renderScore,
-          playbackMap: event.data.playbackMap,
+          score: response.score,
+          renderScore: response.renderScore,
+          playbackMap: response.playbackMap,
           error: ""
         });
       } else {
         setRuntimeDiagnostics((previousDiagnostics) => ({
           ...previousDiagnostics,
-          scoreRenderWorkerMs: event.data.durationMs
+          scoreRenderWorkerMs: response.durationMs,
+          scoreRenderError: response.message
         }));
         setScoreRenderState({
           status: "error",
           score: null,
           renderScore: null,
           playbackMap: EMPTY_PLAYBACK_MAP,
-          error: event.data.message
+          error: response.message
         });
       }
     };
@@ -327,7 +333,8 @@ export function App() {
 
       setRuntimeDiagnostics((previousDiagnostics) => ({
         ...previousDiagnostics,
-        midiParseWorkerMs: parseResult.durationMs
+        midiParseWorkerMs: parseResult.durationMs,
+        midiParseError: undefined
       }));
 
       const loadInput = {
@@ -348,6 +355,11 @@ export function App() {
         return;
       }
 
+      setRuntimeDiagnostics((previousDiagnostics) => ({
+        ...previousDiagnostics,
+        midiParseWorkerMs: getTimedWorkerErrorDuration(err) ?? previousDiagnostics.midiParseWorkerMs,
+        midiParseError: err instanceof Error ? err.message : "MIDI 解析失败。"
+      }));
       setSong(null);
       currentLoadInputRef.current = null;
       loadingPlayer.stop();
@@ -758,11 +770,22 @@ function PlaybackDiagnosticsPanel({
         </div>
         <div>
           <dt>错误</dt>
-          <dd>{playerDiagnostics.lastErrorType ?? "-"}</dd>
+          <dd>
+            {playerDiagnostics.lastErrorType ??
+              runtimeDiagnostics.midiParseError ??
+              runtimeDiagnostics.scoreRenderError ??
+              "-"}
+          </dd>
         </div>
       </dl>
       {playerDiagnostics.fallbackReason ? (
         <p>{playerDiagnostics.fallbackReason}</p>
+      ) : null}
+      {runtimeDiagnostics.midiParseError ? (
+        <p>{runtimeDiagnostics.midiParseError}</p>
+      ) : null}
+      {runtimeDiagnostics.scoreRenderError ? (
+        <p>{runtimeDiagnostics.scoreRenderError}</p>
       ) : null}
     </section>
   );
@@ -796,7 +819,7 @@ function parseMidiInWorker(
           durationMs: event.data.durationMs
         });
       } else {
-        reject(new Error(event.data.message));
+        reject(createTimedWorkerError(event.data.message, event.data.durationMs));
       }
     };
 
@@ -808,6 +831,26 @@ function parseMidiInWorker(
     const request: MidiParseRequest = { requestId, buffer, fileName };
     worker.postMessage(request, [buffer]);
   });
+}
+
+function createTimedWorkerError(message: string, durationMs: number): Error {
+  const error = new Error(message);
+
+  (error as Error & { durationMs?: number }).durationMs = durationMs;
+  return error;
+}
+
+function getTimedWorkerErrorDuration(error: unknown): number | undefined {
+  if (
+    error &&
+    typeof error === "object" &&
+    "durationMs" in error &&
+    typeof error.durationMs === "number"
+  ) {
+    return error.durationMs;
+  }
+
+  return undefined;
 }
 
 function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean {
