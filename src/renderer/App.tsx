@@ -1,14 +1,16 @@
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from "../shared/settings";
+import { StaffNotationPanel } from "./features/notation/StaffNotationPanel";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { parseMidiFile, type NoteCluster, type ParsedSong } from "./lib/midi";
-import { formatTime } from "./lib/notation";
+import { parseMidiFile, type ParsedSong } from "./lib/midi";
 import { createPlayer } from "./lib/player/createPlayer";
 import type {
   MidiPlaybackEngine,
   PlayerLoadInput,
   PlayerSnapshot
 } from "./lib/player/types";
+import { createScoreDraft } from "./lib/score";
+import { formatTime } from "./lib/time";
 
 type AppView = "player" | "settings";
 
@@ -97,9 +99,9 @@ export function App() {
     };
   }, []);
 
-  const clusterPlayback = useMemo(() => {
-    return song ? findClusterPlayback(song.clusters, snapshot.positionMs) : { activeIndex: -1, pastIndex: -1 };
-  }, [snapshot.positionMs, song]);
+  const scoreDraft = useMemo(() => {
+    return song ? createScoreDraft({ song }) : null;
+  }, [song]);
 
   const progressPercent = song?.durationMs
     ? Math.min(100, (snapshot.positionMs / song.durationMs) * 100)
@@ -321,7 +323,7 @@ export function App() {
       <header className="top-bar">
         <div>
           <p className="eyebrow">midi-studio</p>
-          <h1>简谱 MIDI 播放器</h1>
+          <h1>MIDI 五线谱播放器</h1>
         </div>
         <div className="top-actions">
           <button
@@ -391,12 +393,12 @@ export function App() {
               {settingsError ? <p className="error-text">{settingsError}</p> : null}
             </aside>
 
-            <section className="notation-panel" aria-label="简谱">
+            <section className="notation-panel" aria-label="五线谱">
               {song ? (
-                <NumberedNotation
-                  activeClusterIndex={clusterPlayback.activeIndex}
-                  clusters={song.clusters}
-                  pastClusterIndex={clusterPlayback.pastIndex}
+                <StaffNotationPanel
+                  positionMs={snapshot.positionMs}
+                  score={scoreDraft}
+                  onSeek={seekTo}
                 />
               ) : (
                 <div className="empty-state">
@@ -463,76 +465,6 @@ export function App() {
       )}
     </main>
   );
-}
-
-type NumberedNotationProps = {
-  clusters: NoteCluster[];
-  activeClusterIndex: number;
-  pastClusterIndex: number;
-};
-
-function NumberedNotation({ clusters, activeClusterIndex, pastClusterIndex }: NumberedNotationProps) {
-  return (
-    <div className="numbered-score">
-      {clusters.map((cluster, index) => (
-        <NoteToken
-          key={cluster.id}
-          cluster={cluster}
-          isActive={index === activeClusterIndex}
-          isPast={index <= pastClusterIndex && index !== activeClusterIndex}
-        />
-      ))}
-    </div>
-  );
-}
-
-type NoteTokenProps = {
-  cluster: NoteCluster;
-  isActive: boolean;
-  isPast: boolean;
-};
-
-const NoteToken = memo(function NoteToken({ cluster, isActive, isPast }: NoteTokenProps) {
-  return (
-    <span
-      className={`note-token${isActive ? " active" : ""}${isPast ? " past" : ""}`}
-      title={`${formatTime(cluster.startMs)} ${cluster.notes.map((note) => note.name).join(" ")}`}
-    >
-      {cluster.label}
-    </span>
-  );
-});
-
-function findClusterPlayback(
-  clusters: NoteCluster[],
-  positionMs: number
-): { activeIndex: number; pastIndex: number } {
-  let low = 0;
-  let high = clusters.length - 1;
-  let candidate = -1;
-
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-
-    if (clusters[mid].startMs <= positionMs) {
-      candidate = mid;
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
-  }
-
-  if (candidate < 0) {
-    return { activeIndex: -1, pastIndex: -1 };
-  }
-
-  const cluster = clusters[candidate];
-  const isActive = positionMs <= Math.max(cluster.endMs, cluster.startMs + 180);
-
-  return {
-    activeIndex: isActive ? candidate : -1,
-    pastIndex: cluster.endMs < positionMs ? candidate : candidate - 1
-  };
 }
 
 function areSnapshotsEqual(left: PlayerSnapshot, right: PlayerSnapshot): boolean {

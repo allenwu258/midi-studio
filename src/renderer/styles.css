@@ -201,46 +201,123 @@ h3 {
   font-size: 20px;
 }
 
-.numbered-score {
-  display: flex;
-  align-content: flex-start;
-  flex-wrap: wrap;
-  gap: 10px 8px;
+.staff-score-viewport {
+  min-width: 760px;
+  min-height: 100%;
   padding-bottom: 80px;
-  font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
 }
 
-.note-token {
-  min-width: 34px;
-  height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0 8px;
-  border: 1px solid #dde4ed;
-  border-radius: 6px;
-  background: #f9fbfd;
-  color: #223142;
-  font-size: 17px;
+.staff-score {
+  width: 100%;
+  min-width: 760px;
+  display: block;
+  overflow: visible;
+  font-family: "Segoe UI Symbol", "Noto Music", "Bravura", "Segoe UI", serif;
+}
+
+.staff-lines line,
+.ledger-line,
+.measure-bar {
+  stroke: #253342;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.measure-bar {
+  stroke: #607083;
+}
+
+.staff-part-name {
+  fill: #536273;
+  font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+  font-size: 12px;
   font-weight: 700;
-  line-height: 1;
+  text-anchor: end;
+}
+
+.clef-glyph {
+  fill: #1f2d3d;
+  font-size: 38px;
+  pointer-events: none;
+}
+
+.time-signature text {
+  fill: #1f2d3d;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 22px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.score-event.chord {
+  cursor: pointer;
+}
+
+.score-event.rest {
+  fill: #9aa6b4;
+  font-size: 20px;
+  pointer-events: none;
+}
+
+.note-head {
+  fill: #202d3b;
+  stroke: #202d3b;
+  stroke-width: 1.2;
   transition:
-    background-color 80ms ease,
-    border-color 80ms ease,
-    color 80ms ease,
+    fill 80ms ease,
+    stroke 80ms ease,
     transform 80ms ease;
 }
 
-.note-token.past {
-  color: #9aa6b4;
-  background: #f3f6f9;
+.note-stem {
+  stroke: #202d3b;
+  stroke-width: 1.6;
+  vector-effect: non-scaling-stroke;
 }
 
-.note-token.active {
-  border-color: #087c73;
-  background: #087c73;
-  color: #ffffff;
-  transform: translateY(-1px);
+.accidental {
+  fill: #526171;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.duration-dot {
+  fill: #202d3b;
+}
+
+.tie-mark {
+  fill: none;
+  stroke: #526171;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.score-event.active .note-head {
+  fill: #087c73;
+  stroke: #065f57;
+}
+
+.score-event.active .note-stem,
+.score-event.active .tie-mark {
+  stroke: #087c73;
+}
+
+.score-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+  color: #657386;
+  font-size: 12px;
+}
+
+.score-diagnostics span {
+  padding: 5px 8px;
+  border: 1px solid #d9e0ea;
+  border-radius: 6px;
+  background: #f7f9fc;
 }
 
 .transport {
