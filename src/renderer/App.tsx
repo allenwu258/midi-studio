@@ -296,9 +296,7 @@ export function App() {
     };
   }, [song]);
 
-  const progressPercent = song?.durationMs
-    ? Math.min(100, (snapshot.positionMs / song.durationMs) * 100)
-    : 0;
+  const getPlaybackPosition = useCallback(() => playerRef.current.getSnapshot().positionMs, []);
 
   const recordOverlayMetrics = useCallback((metrics: { lookupMs: number; activeEventCount: number }) => {
     setRuntimeDiagnostics((previousDiagnostics) => ({
@@ -637,7 +635,7 @@ export function App() {
               {song ? (
                 <StaffNotationPanel
                   isRendering={scoreRenderState.status === "rendering"}
-                  positionMs={snapshot.positionMs}
+                  getPlaybackPosition={getPlaybackPosition}
                   playbackMap={scoreRenderState.playbackMap}
                   renderError={scoreRenderState.error}
                   renderScore={scoreRenderState.renderScore}
@@ -672,11 +670,11 @@ export function App() {
               >
                 停止
               </button>
-              <div className="time-readout">
-                <span>{formatTime(snapshot.positionMs)}</span>
-                <span>/</span>
-                <span>{formatTime(song?.durationMs ?? 0)}</span>
-              </div>
+              <PlaybackClockReadout
+                durationMs={song?.durationMs ?? 0}
+                getPlaybackPosition={getPlaybackPosition}
+                status={snapshot.status}
+              />
               <label className="speed-control">
                 <span>速度</span>
                 <input
@@ -691,20 +689,13 @@ export function App() {
                 <strong>{speed}%</strong>
               </label>
             </div>
-            <div className="progress-wrap">
-              <input
-                className="progress-input"
-                type="range"
-                min="0"
-                max={Math.max(1, Math.round(song?.durationMs ?? 1))}
-                step="1"
-                value={Math.round(snapshot.positionMs)}
-                disabled={!song || isPlayerUnavailable}
-                onChange={(event) => seekTo(Number(event.currentTarget.value))}
-                aria-label="播放进度"
-              />
-              <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
-            </div>
+            <PlaybackProgressControl
+              disabled={!song || isPlayerUnavailable}
+              durationMs={song?.durationMs ?? 0}
+              getPlaybackPosition={getPlaybackPosition}
+              status={snapshot.status}
+              onSeek={seekTo}
+            />
           </footer>
         </>
       )}
@@ -788,6 +779,94 @@ function PlaybackDiagnosticsPanel({
         <p>{runtimeDiagnostics.scoreRenderError}</p>
       ) : null}
     </section>
+  );
+}
+
+function PlaybackClockReadout({
+  durationMs,
+  getPlaybackPosition,
+  status
+}: {
+  durationMs: number;
+  getPlaybackPosition: () => number;
+  status: PlayerSnapshot["status"];
+}) {
+  const positionRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    function updateClock() {
+      if (positionRef.current) {
+        positionRef.current.textContent = formatTime(getPlaybackPosition());
+      }
+    }
+
+    updateClock();
+    const intervalId = window.setInterval(updateClock, PLAYBACK_SNAPSHOT_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [durationMs, getPlaybackPosition, status]);
+
+  return (
+    <div className="time-readout">
+      <span ref={positionRef}>{formatTime(getPlaybackPosition())}</span>
+      <span>/</span>
+      <span>{formatTime(durationMs)}</span>
+    </div>
+  );
+}
+
+function PlaybackProgressControl({
+  disabled,
+  durationMs,
+  getPlaybackPosition,
+  status,
+  onSeek
+}: {
+  disabled: boolean;
+  durationMs: number;
+  getPlaybackPosition: () => number;
+  status: PlayerSnapshot["status"];
+  onSeek: (positionMs: number) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const fillRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function updateProgress() {
+      const positionMs = getPlaybackPosition();
+      const progressPercent = durationMs ? Math.min(100, (positionMs / durationMs) * 100) : 0;
+
+      if (inputRef.current && document.activeElement !== inputRef.current) {
+        inputRef.current.value = String(Math.round(positionMs));
+      }
+
+      if (fillRef.current) {
+        fillRef.current.style.width = `${progressPercent}%`;
+      }
+    }
+
+    updateProgress();
+    const intervalId = window.setInterval(updateProgress, PLAYBACK_SNAPSHOT_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [durationMs, getPlaybackPosition, status]);
+
+  return (
+    <div className="progress-wrap">
+      <input
+        ref={inputRef}
+        className="progress-input"
+        type="range"
+        min="0"
+        max={Math.max(1, Math.round(durationMs || 1))}
+        step="1"
+        defaultValue={Math.round(getPlaybackPosition())}
+        disabled={disabled}
+        onChange={(event) => onSeek(Number(event.currentTarget.value))}
+        aria-label="播放进度"
+      />
+      <div ref={fillRef} className="progress-fill" />
+    </div>
   );
 }
 
@@ -875,7 +954,7 @@ function shouldCommitPlayerSnapshot(left: PlayerSnapshot, right: PlayerSnapshot)
     return !areSnapshotsEqual(left, right);
   }
 
-  return Math.abs(right.positionMs - left.positionMs) >= PLAYBACK_SNAPSHOT_INTERVAL_MS;
+  return false;
 }
 
 function formatDuration(value: number | undefined): string {

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import type { ScoreDraft, ScoreEvent, ScoreStaff } from "../../lib/score";
 import { accidentalText } from "../../lib/score/pitchSpelling";
 import {
@@ -25,7 +25,7 @@ type StaffNotationPanelProps = {
   renderError: string;
   renderScore: RenderScore | null;
   score: ScoreDraft | null;
-  positionMs: number;
+  getPlaybackPosition: () => number;
   onPlaybackMetrics?: (metrics: { lookupMs: number; activeEventCount: number }) => void;
   onSeek: (positionMs: number) => void;
 };
@@ -44,34 +44,45 @@ export function StaffNotationPanel({
   renderError,
   renderScore,
   score,
-  positionMs,
+  getPlaybackPosition,
   onPlaybackMetrics,
   onSeek
 }: StaffNotationPanelProps) {
+  const activeOverlayRef = useRef<SVGGElement | null>(null);
   const activeEventIndex = useMemo(
     () => (renderScore ? buildActiveEventIndex(renderScore) : new Map<string, ActiveRenderEvent>()),
     [renderScore]
   );
-  const activePositionResult = useMemo(() => {
-    const startedAt = performance.now();
-
-    return {
-      activePosition: findActiveScorePosition(playbackMap, positionMs),
-      lookupMs: performance.now() - startedAt
-    };
-  }, [playbackMap, positionMs]);
-  const activePosition = activePositionResult.activePosition;
-  const activeEvents = useMemo(
-    () => Array.from(activePosition.activeIds, (id) => activeEventIndex.get(id)).filter(isActiveRenderEvent),
-    [activeEventIndex, activePosition.activeIds]
-  );
 
   useEffect(() => {
-    onPlaybackMetrics?.({
-      lookupMs: activePositionResult.lookupMs,
-      activeEventCount: activeEvents.length
-    });
-  }, [activeEvents.length, activePositionResult.lookupMs, onPlaybackMetrics]);
+    const overlay = activeOverlayRef.current;
+
+    if (!renderScore || !overlay) {
+      return undefined;
+    }
+
+    const overlayElement: SVGGElement = overlay;
+
+    function updateOverlay() {
+      const startedAt = performance.now();
+      const activePosition = findActiveScorePosition(playbackMap, getPlaybackPosition());
+      const activeEvents = Array.from(activePosition.activeIds, (id) =>
+        activeEventIndex.get(id)
+      ).filter(isActiveRenderEvent);
+      const lookupMs = performance.now() - startedAt;
+
+      renderActiveScoreOverlay(overlayElement, activeEvents);
+      onPlaybackMetrics?.({
+        lookupMs,
+        activeEventCount: activeEvents.length
+      });
+    }
+
+    updateOverlay();
+    const intervalId = window.setInterval(updateOverlay, 125);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeEventIndex, getPlaybackPosition, onPlaybackMetrics, playbackMap, renderScore]);
 
   if (renderError) {
     return (
@@ -126,7 +137,7 @@ export function StaffNotationPanel({
       >
         <title>{score.title}</title>
         <StaticScoreSvg renderScore={renderScore} />
-        <ActiveScoreOverlay activeEvents={activeEvents} />
+        <g ref={activeOverlayRef} className="active-score-overlay" aria-hidden="true" />
       </svg>
       {score.diagnostics.length ? (
         <div className="score-diagnostics" aria-label="导入诊断">
@@ -193,58 +204,79 @@ function isActiveRenderEvent(event: ActiveRenderEvent | undefined): event is Act
   return Boolean(event);
 }
 
-function ActiveScoreOverlay({ activeEvents }: { activeEvents: ActiveRenderEvent[] }) {
+function renderActiveScoreOverlay(overlay: SVGGElement, activeEvents: ActiveRenderEvent[]): void {
   const beams = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.beams));
   const tuplets = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.tuplets));
 
-  if (!activeEvents.length) {
-    return null;
-  }
-
-  return (
-    <g className="active-score-overlay" aria-hidden="true">
-      {beams.map((beam) => (
-        <BeamGroupSvg key={beam.id} beam={beam} />
-      ))}
-      {tuplets.map((tuplet) => (
-        <TupletSvg key={tuplet.id} tuplet={tuplet} />
-      ))}
-      {activeEvents.map((activeEvent) => (
-        <ActiveEventSvg key={activeEvent.event.event.id} renderEvent={activeEvent.event} />
-      ))}
-    </g>
-  );
+  overlay.innerHTML = [
+    ...beams.map(activeBeamMarkup),
+    ...tuplets.map(activeTupletMarkup),
+    ...activeEvents.map((activeEvent) => activeEventMarkup(activeEvent.event))
+  ].join("");
 }
 
-function ActiveEventSvg({ renderEvent }: { renderEvent: RenderEvent }) {
+function activeEventMarkup(renderEvent: RenderEvent): string {
   if (renderEvent.event.kind === "rest") {
-    return null;
+    return "";
   }
 
-  return (
-    <g className="active-score-event">
-      {renderEvent.notes.map((note) => (
-        <ellipse
-          key={`${renderEvent.event.id}-${note.note.sourceNoteId}`}
-          className="note-head"
-          cx={note.noteHeadX}
-          cy={note.y}
-          rx="8.5"
-          ry="6"
-          transform={`rotate(-18 ${note.noteHeadX} ${note.y})`}
-        />
-      ))}
-      {renderEvent.event.durationName !== "whole" && !renderEvent.beamed ? (
-        <Stem renderEvent={renderEvent} />
-      ) : null}
-      {renderEvent.event.tieStart ? (
-        <path
-          className="tie-mark"
-          d={`M ${renderEvent.x - 5} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 14} C ${renderEvent.x + 28} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 28}, ${renderEvent.x + 68} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 28}, ${renderEvent.x + 100} ${Math.max(...renderEvent.notes.map((note) => note.y)) + 14}`}
-        />
-      ) : null}
-    </g>
-  );
+  const noteHeads = renderEvent.notes
+    .map(
+      (note) =>
+        `<ellipse class="note-head" cx="${note.noteHeadX}" cy="${note.y}" rx="8.5" ry="6" transform="rotate(-18 ${note.noteHeadX} ${note.y})" />`
+    )
+    .join("");
+  const stem = renderEvent.event.durationName !== "whole" && !renderEvent.beamed
+    ? stemMarkup(renderEvent)
+    : "";
+  const tie = renderEvent.event.tieStart ? tieMarkup(renderEvent) : "";
+
+  return `<g class="active-score-event">${noteHeads}${stem}${tie}</g>`;
+}
+
+function stemMarkup(renderEvent: RenderEvent): string {
+  const x = renderEvent.x;
+
+  if (renderEvent.stemDirection === "down") {
+    const y = Math.max(...renderEvent.notes.map((note) => note.y));
+    return `<line class="note-stem" x1="${x - 7}" x2="${x - 7}" y1="${y + 2}" y2="${y + 42}" />`;
+  }
+
+  const y = Math.min(...renderEvent.notes.map((note) => note.y));
+  return `<line class="note-stem" x1="${x + 7}" x2="${x + 7}" y1="${y - 2}" y2="${y - 42}" />`;
+}
+
+function tieMarkup(renderEvent: RenderEvent): string {
+  const y = Math.max(...renderEvent.notes.map((note) => note.y));
+
+  return `<path class="tie-mark" d="M ${renderEvent.x - 5} ${y + 14} C ${renderEvent.x + 28} ${y + 28}, ${renderEvent.x + 68} ${y + 28}, ${renderEvent.x + 100} ${y + 14}" />`;
+}
+
+function activeBeamMarkup(beam: RenderBeamGroup): string {
+  const stems = beam.points
+    .map(
+      (point) =>
+        `<line class="note-stem" x1="${point.stemX}" x2="${point.stemX}" y1="${point.baseY}" y2="${point.beamY}" />`
+    )
+    .join("");
+  const beams = Array.from({ length: beam.maxBeamCount })
+    .map((_, beamIndex) =>
+      beamSegments(beam.points, beamIndex + 1)
+        .map((segment) => {
+          const offset = beam.direction === "up" ? beamIndex * 7 : -beamIndex * 7;
+          return `<line class="beam-line" x1="${segment.x1}" x2="${segment.x2}" y1="${segment.y1 + offset}" y2="${segment.y2 + offset}" />`;
+        })
+        .join("")
+    )
+    .join("");
+
+  return `<g class="beam-group">${stems}${beams}</g>`;
+}
+
+function activeTupletMarkup(tuplet: RenderTuplet): string {
+  const hook = tuplet.direction === "up" ? 6 : -6;
+
+  return `<g class="tuplet-mark"><path d="M ${tuplet.x1} ${tuplet.bracketY + hook} L ${tuplet.x1} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY} L ${tuplet.x2} ${tuplet.bracketY + hook}" /><text x="${(tuplet.x1 + tuplet.x2) / 2}" y="${tuplet.y}">${tuplet.label}</text></g>`;
 }
 
 function uniqueById<T extends { id: string }>(items: T[]): T[] {
