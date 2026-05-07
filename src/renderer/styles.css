@@ -171,6 +171,54 @@ h3 {
   overflow-wrap: anywhere;
 }
 
+.playback-diagnostics {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #e6ebf2;
+}
+
+.playback-diagnostics h2 {
+  margin: 0;
+  color: #566478;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.playback-diagnostics dl {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.playback-diagnostics div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.playback-diagnostics dt {
+  color: #7b8797;
+  font-size: 12px;
+}
+
+.playback-diagnostics dd {
+  margin: 0;
+  color: #1d2b3a;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+  text-align: right;
+}
+
+.playback-diagnostics p {
+  margin: 0;
+  color: #9a5b19;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .error-text {
   margin: 16px 0 0;
   padding: 12px;

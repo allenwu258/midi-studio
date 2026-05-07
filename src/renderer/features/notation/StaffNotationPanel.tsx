@@ -1,4 +1,4 @@
-import { memo, useMemo } from "react";
+import { memo, useEffect, useMemo } from "react";
 import type { ScoreDraft, ScoreEvent, ScoreStaff } from "../../lib/score";
 import { accidentalText } from "../../lib/score/pitchSpelling";
 import {
@@ -26,6 +26,7 @@ type StaffNotationPanelProps = {
   renderScore: RenderScore | null;
   score: ScoreDraft | null;
   positionMs: number;
+  onPlaybackMetrics?: (metrics: { lookupMs: number; activeEventCount: number }) => void;
   onSeek: (positionMs: number) => void;
 };
 
@@ -44,20 +45,33 @@ export function StaffNotationPanel({
   renderScore,
   score,
   positionMs,
+  onPlaybackMetrics,
   onSeek
 }: StaffNotationPanelProps) {
   const activeEventIndex = useMemo(
     () => (renderScore ? buildActiveEventIndex(renderScore) : new Map<string, ActiveRenderEvent>()),
     [renderScore]
   );
-  const activePosition = useMemo(
-    () => findActiveScorePosition(playbackMap, positionMs),
-    [playbackMap, positionMs]
-  );
+  const activePositionResult = useMemo(() => {
+    const startedAt = performance.now();
+
+    return {
+      activePosition: findActiveScorePosition(playbackMap, positionMs),
+      lookupMs: performance.now() - startedAt
+    };
+  }, [playbackMap, positionMs]);
+  const activePosition = activePositionResult.activePosition;
   const activeEvents = useMemo(
     () => Array.from(activePosition.activeIds, (id) => activeEventIndex.get(id)).filter(isActiveRenderEvent),
     [activeEventIndex, activePosition.activeIds]
   );
+
+  useEffect(() => {
+    onPlaybackMetrics?.({
+      lookupMs: activePositionResult.lookupMs,
+      activeEventCount: activeEvents.length
+    });
+  }, [activeEvents.length, activePositionResult.lookupMs, onPlaybackMetrics]);
 
   if (renderError) {
     return (

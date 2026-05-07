@@ -12,6 +12,7 @@ const workerScope = self as unknown as ScoreRenderWorkerScope;
 
 workerScope.onmessage = (event) => {
   const { requestId, song } = event.data;
+  const startedAt = performance.now();
 
   try {
     const score = createScoreDraft({ song });
@@ -21,6 +22,7 @@ workerScope.onmessage = (event) => {
     workerScope.postMessage({
       requestId,
       status: "success",
+      durationMs: performance.now() - startedAt,
       score,
       renderScore,
       playbackMap
@@ -29,6 +31,7 @@ workerScope.onmessage = (event) => {
     workerScope.postMessage({
       requestId,
       status: "error",
+      durationMs: performance.now() - startedAt,
       message: error instanceof Error ? error.message : "乐谱生成失败。"
     });
   }

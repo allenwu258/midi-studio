@@ -1,5 +1,6 @@
 import type {
   MidiPlaybackEngine,
+  PlayerDiagnostics,
   PlayerLoadInput,
   PlayerSnapshot,
   PlayerStatus
@@ -23,6 +24,10 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private soundFontError: Error | null = null;
   private soundFontTimeoutId = 0;
   private synthReadyTimeoutId = 0;
+  private scriptLoadStartedAt: number | null = null;
+  private synthReadyStartedAt: number | null = null;
+  private soundFontLoadStartedAt: number | null = null;
+  private midiLoadStartedAt: number | null = null;
   private midiReady = false;
   private disposed = false;
   private speed = 1;
@@ -34,6 +39,11 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     durationMs: 0
   };
   private listeners = new Set<(snapshot: PlayerSnapshot) => void>();
+  private diagnosticsListeners = new Set<(diagnostics: PlayerDiagnostics) => void>();
+  private diagnostics: PlayerDiagnostics = {
+    engine: "sf2-synth",
+    outputMode: "unknown"
+  };
   private pendingLoad:
     | {
         loadId: number;
@@ -128,6 +138,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     this.pendingLoad?.reject(new Error("播放器已释放。"));
     this.pendingLoad = null;
     this.listeners.clear();
+    this.diagnosticsListeners.clear();
   }
 
   getSnapshot(): PlayerSnapshot {
@@ -142,19 +153,37 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     };
   }
 
+  getDiagnostics(): PlayerDiagnostics {
+    return this.diagnostics;
+  }
+
+  subscribeDiagnostics(listener: (diagnostics: PlayerDiagnostics) => void): () => void {
+    this.diagnosticsListeners.add(listener);
+    listener(this.getDiagnostics());
+    return () => {
+      this.diagnosticsListeners.delete(listener);
+    };
+  }
+
   private async createSynth(): Promise<void> {
     if (this.synth) {
       return;
     }
 
+    this.scriptLoadStartedAt = performance.now();
     try {
       await loadAlphaSynthScript();
+      this.patchDiagnostics({
+        alphaSynthScriptLoadMs: elapsedSince(this.scriptLoadStartedAt)
+      });
     } catch (error) {
+      this.patchDiagnostics({ lastErrorType: "script-load" });
       this.setError(error instanceof Error ? error.message : "alphaSynth 脚本加载失败。");
       return;
     }
 
     if (!window.alphaSynth) {
+      this.patchDiagnostics({ lastErrorType: "script-load" });
       this.setError("alphaSynth 未加载。");
       return;
     }
@@ -167,6 +196,13 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         return;
       } catch (error) {
         lastError = error;
+        this.patchDiagnostics({
+          fallbackReason:
+            outputMode === "audio-worklet"
+              ? toError(error, "AudioWorklet 初始化失败。").message
+              : this.diagnostics.fallbackReason,
+          lastErrorType: outputMode === "audio-worklet" ? "worklet-init" : "synth-init"
+        });
         this.destroySynth();
       }
     }
@@ -189,6 +225,10 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     settings.logLevel = window.alphaSynth.LogLevel.None;
     settings.outputMode = getAlphaSynthOutputModeValue(outputMode);
 
+    this.synthReadyStartedAt = performance.now();
+    this.patchDiagnostics({
+      outputMode: outputMode === "audio-worklet" ? "audio-worklet" : "script-processor"
+    });
     const synth = new window.alphaSynth.AlphaSynthApi(settings);
     this.synth = synth;
     this.startSynthReadyFallbackTimeout(synth, outputMode);
@@ -197,6 +237,11 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         return;
       }
       this.clearSynthReadyTimeout();
+      this.soundFontLoadStartedAt = performance.now();
+      this.patchDiagnostics({
+        synthReadyMs: elapsedSince(this.synthReadyStartedAt),
+        outputMode: outputMode === "audio-worklet" ? "audio-worklet" : "script-processor"
+      });
       synth.setMasterVolume(this.masterVolume);
       this.startSoundFontTimeout();
     });
@@ -206,10 +251,14 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       }
       this.clearSoundFontTimeout();
       this.soundFontReady = true;
+      this.patchDiagnostics({
+        soundFontLoadMs: elapsedSince(this.soundFontLoadStartedAt)
+      });
       this.loadMidiIfPossible();
     });
     synth.soundFontLoadFailed.on((event) => {
       if (!this.disposed && this.synth === synth) {
+        this.patchDiagnostics({ lastErrorType: "soundfont-load" });
         this.failSoundFontLoad(toError(event, "SF2 音源加载失败。"));
       }
     });
@@ -222,6 +271,9 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         return;
       }
       this.midiReady = true;
+      this.patchDiagnostics({
+        midiLoadMs: elapsedSince(this.midiLoadStartedAt)
+      });
       this.setSnapshot({
         status: "ready",
         positionMs: event.currentTime ?? 0,
@@ -234,6 +286,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     });
     synth.midiLoadFailed.on((event) => {
       if (!this.disposed && this.synth === synth) {
+        this.patchDiagnostics({ lastErrorType: "midi-load" });
         this.rejectPendingLoad(toError(event, "MIDI 加载到 alphaSynth 失败。"));
       }
     });
@@ -286,6 +339,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       loadingMessage: "MIDI 加载中"
     });
     this.synth.setPlaybackSpeed(this.speed);
+    this.midiLoadStartedAt = performance.now();
     pendingLoad.midiStarted = true;
     this.synth.loadMidiFile(this.midiBytes);
   }
@@ -326,10 +380,15 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       }
 
       this.destroySynth();
+      this.patchDiagnostics({
+        fallbackReason: "AudioWorklet ready 超时，已回退到 ScriptProcessor。",
+        lastErrorType: "worklet-ready-timeout"
+      });
 
       try {
         this.createAlphaSynthApi("script-processor");
       } catch (error) {
+        this.patchDiagnostics({ lastErrorType: "script-processor-fallback" });
         this.setError(
           error instanceof Error
             ? `alphaSynth 回退到 ScriptProcessor 失败：${error.message}`
@@ -410,6 +469,14 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     this.emit();
   }
 
+  private patchDiagnostics(patch: Partial<PlayerDiagnostics>): void {
+    this.diagnostics = {
+      ...this.diagnostics,
+      ...patch
+    };
+    this.emitDiagnostics();
+  }
+
   private setSnapshot(patch: Partial<PlayerSnapshot>): void {
     this.snapshot = {
       ...this.snapshot,
@@ -421,6 +488,12 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private emit(): void {
     for (const listener of this.listeners) {
       listener(this.snapshot);
+    }
+  }
+
+  private emitDiagnostics(): void {
+    for (const listener of this.diagnosticsListeners) {
+      listener(this.diagnostics);
     }
   }
 }
@@ -448,6 +521,10 @@ function getAlphaSynthOutputModeValue(outputMode: AlphaSynthOutputMode): number 
   }
 
   return outputModes?.WebAudioScriptProcessor ?? 1;
+}
+
+function elapsedSince(startedAt: number | null): number | undefined {
+  return startedAt === null ? undefined : Math.max(0, performance.now() - startedAt);
 }
 
 function loadAlphaSynthScript(): Promise<void> {

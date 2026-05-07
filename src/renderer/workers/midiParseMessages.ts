@@ -9,12 +9,14 @@ export type MidiParseRequest = {
 export type MidiParseSuccess = {
   requestId: number;
   status: "success";
+  durationMs: number;
   song: ParsedSong;
 };
 
 export type MidiParseFailure = {
   requestId: number;
   status: "error";
+  durationMs: number;
   message: string;
 };
 

@@ -11,6 +11,7 @@ export type ScoreRenderRequest = {
 export type ScoreRenderSuccess = {
   requestId: number;
   status: "success";
+  durationMs: number;
   score: ScoreDraft;
   renderScore: RenderScore;
   playbackMap: PlaybackMapEntry[];
@@ -19,6 +20,7 @@ export type ScoreRenderSuccess = {
 export type ScoreRenderFailure = {
   requestId: number;
   status: "error";
+  durationMs: number;
   message: string;
 };
 

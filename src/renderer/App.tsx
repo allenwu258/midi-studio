@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_SETTINGS, type SettingsStorageInfo, type UserSettings } from "../shared/settings";
 import { StaffNotationPanel } from "./features/notation/StaffNotationPanel";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -6,6 +6,7 @@ import type { ParsedSong } from "./lib/midi";
 import { createPlayer } from "./lib/player/createPlayer";
 import type {
   MidiPlaybackEngine,
+  PlayerDiagnostics,
   PlayerLoadInput,
   PlayerSnapshot
 } from "./lib/player/types";
@@ -17,6 +18,20 @@ import type { MidiParseRequest, MidiParseResponse } from "./workers/midiParseMes
 import type { ScoreRenderRequest, ScoreRenderResponse } from "./workers/scoreRenderMessages";
 
 type AppView = "player" | "settings";
+type PlaybackRuntimeDiagnostics = {
+  longTaskCount: number;
+  longestLongTaskMs: number;
+  midiParseWorkerMs?: number;
+  scoreRenderWorkerMs?: number;
+  snapshotCommitCount: number;
+  overlayUpdateCount: number;
+  overlayLookupMs?: number;
+  overlayEventCount: number;
+};
+type MidiParseResult = {
+  song: ParsedSong;
+  durationMs: number;
+};
 type ScoreRenderState =
   | {
       status: "idle" | "rendering";
@@ -42,6 +57,13 @@ type ScoreRenderState =
 
 const PLAYBACK_SNAPSHOT_INTERVAL_MS = 125;
 const EMPTY_PLAYBACK_MAP: PlaybackMapEntry[] = [];
+const DEFAULT_RUNTIME_DIAGNOSTICS: PlaybackRuntimeDiagnostics = {
+  longTaskCount: 0,
+  longestLongTaskMs: 0,
+  snapshotCommitCount: 0,
+  overlayUpdateCount: 0,
+  overlayEventCount: 0
+};
 
 export function App() {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -53,6 +75,7 @@ export function App() {
   );
   const playerModeRef = useRef(DEFAULT_SETTINGS.playbackEngineMode);
   const playerUnsubscribeRef = useRef<(() => void) | null>(null);
+  const playerDiagnosticsUnsubscribeRef = useRef<(() => void) | null>(null);
   const playerDisposeTimeoutRef = useRef<number | null>(null);
   const scoreRenderWorkerRef = useRef<Worker | null>(null);
   const scoreRenderRequestIdRef = useRef(0);
@@ -61,8 +84,15 @@ export function App() {
   const settingsRef = useRef<UserSettings>(DEFAULT_SETTINGS);
   const settingsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSettingsSaveCountRef = useRef(0);
+  const snapshotStatusRef = useRef<PlayerSnapshot["status"]>(playerRef.current.getSnapshot().status);
   const [song, setSong] = useState<ParsedSong | null>(null);
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
+  const [playerDiagnostics, setPlayerDiagnostics] = useState<PlayerDiagnostics>(() =>
+    playerRef.current.getDiagnostics()
+  );
+  const [runtimeDiagnostics, setRuntimeDiagnostics] = useState<PlaybackRuntimeDiagnostics>(
+    DEFAULT_RUNTIME_DIAGNOSTICS
+  );
   const [speed, setSpeed] = useState(100);
   const [error, setError] = useState("");
   const [view, setView] = useState<AppView>("player");
@@ -81,6 +111,7 @@ export function App() {
   useEffect(() => {
     cancelPendingPlayerDispose();
     playerUnsubscribeRef.current = playerRef.current.subscribe(commitPlayerSnapshot);
+    playerDiagnosticsUnsubscribeRef.current = playerRef.current.subscribeDiagnostics(setPlayerDiagnostics);
     const intervalId = window.setInterval(() => {
       const nextSnapshot = playerRef.current.getSnapshot();
 
@@ -90,9 +121,45 @@ export function App() {
     return () => {
       playerUnsubscribeRef.current?.();
       playerUnsubscribeRef.current = null;
+      playerDiagnosticsUnsubscribeRef.current?.();
+      playerDiagnosticsUnsubscribeRef.current = null;
       window.clearInterval(intervalId);
       schedulePlayerDispose();
     };
+  }, []);
+
+  useEffect(() => {
+    const observerConstructor = window.PerformanceObserver;
+    const supportedEntryTypes = observerConstructor?.supportedEntryTypes ?? [];
+
+    if (!observerConstructor || !supportedEntryTypes.includes("longtask")) {
+      return undefined;
+    }
+
+    const observer = new observerConstructor((list) => {
+      const entries = list.getEntries();
+
+      if (snapshotStatusRef.current !== "playing" || entries.length === 0) {
+        return;
+      }
+
+      setRuntimeDiagnostics((previousDiagnostics) => {
+        const longestLongTaskMs = entries.reduce(
+          (maxDuration, entry) => Math.max(maxDuration, entry.duration),
+          previousDiagnostics.longestLongTaskMs
+        );
+
+        return {
+          ...previousDiagnostics,
+          longTaskCount: previousDiagnostics.longTaskCount + entries.length,
+          longestLongTaskMs
+        };
+      });
+    });
+
+    observer.observe({ entryTypes: ["longtask"] });
+
+    return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
@@ -172,6 +239,10 @@ export function App() {
       }
 
       if (event.data.status === "success") {
+        setRuntimeDiagnostics((previousDiagnostics) => ({
+          ...previousDiagnostics,
+          scoreRenderWorkerMs: event.data.durationMs
+        }));
         setScoreRenderState({
           status: "ready",
           score: event.data.score,
@@ -180,6 +251,10 @@ export function App() {
           error: ""
         });
       } else {
+        setRuntimeDiagnostics((previousDiagnostics) => ({
+          ...previousDiagnostics,
+          scoreRenderWorkerMs: event.data.durationMs
+        }));
         setScoreRenderState({
           status: "error",
           score: null,
@@ -219,6 +294,15 @@ export function App() {
     ? Math.min(100, (snapshot.positionMs / song.durationMs) * 100)
     : 0;
 
+  const recordOverlayMetrics = useCallback((metrics: { lookupMs: number; activeEventCount: number }) => {
+    setRuntimeDiagnostics((previousDiagnostics) => ({
+      ...previousDiagnostics,
+      overlayUpdateCount: previousDiagnostics.overlayUpdateCount + 1,
+      overlayLookupMs: metrics.lookupMs,
+      overlayEventCount: metrics.activeEventCount
+    }));
+  }, []);
+
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.currentTarget.files?.[0];
     if (!file) {
@@ -233,11 +317,18 @@ export function App() {
       loadGenerationRef.current = loadGeneration;
       const buffer = await file.arrayBuffer();
       const midiBytes = buffer.slice(0);
-      const parsedSong = await parseMidiInWorker(buffer, file.name, loadGeneration);
+      setRuntimeDiagnostics(DEFAULT_RUNTIME_DIAGNOSTICS);
+      const parseResult = await parseMidiInWorker(buffer, file.name, loadGeneration);
+      const parsedSong = parseResult.song;
 
       if (loadGenerationRef.current !== loadGeneration) {
         return;
       }
+
+      setRuntimeDiagnostics((previousDiagnostics) => ({
+        ...previousDiagnostics,
+        midiParseWorkerMs: parseResult.durationMs
+      }));
 
       const loadInput = {
         midiBytes,
@@ -388,10 +479,12 @@ export function App() {
     const resumePositionMs = previousSnapshot.positionMs;
 
     playerUnsubscribeRef.current?.();
+    playerDiagnosticsUnsubscribeRef.current?.();
     previousPlayer.dispose();
     playerModeRef.current = mode;
     playerRef.current = nextPlayer;
     playerUnsubscribeRef.current = nextPlayer.subscribe(commitPlayerSnapshot);
+    playerDiagnosticsUnsubscribeRef.current = nextPlayer.subscribeDiagnostics(setPlayerDiagnostics);
 
     if (!options.reloadCurrentSong || !loadInput) {
       return;
@@ -409,9 +502,18 @@ export function App() {
   }
 
   function commitPlayerSnapshot(nextSnapshot: PlayerSnapshot) {
-    setSnapshot((previousSnapshot) =>
-      shouldCommitPlayerSnapshot(previousSnapshot, nextSnapshot) ? nextSnapshot : previousSnapshot
-    );
+    setSnapshot((previousSnapshot) => {
+      if (!shouldCommitPlayerSnapshot(previousSnapshot, nextSnapshot)) {
+        return previousSnapshot;
+      }
+
+      snapshotStatusRef.current = nextSnapshot.status;
+      setRuntimeDiagnostics((previousDiagnostics) => ({
+        ...previousDiagnostics,
+        snapshotCommitCount: previousDiagnostics.snapshotCommitCount + 1
+      }));
+      return nextSnapshot;
+    });
   }
 
   function cancelPendingPlayerDispose() {
@@ -511,6 +613,10 @@ export function App() {
                   <dd>{formatPlayerStatus(snapshot)}</dd>
                 </div>
               </dl>
+              <PlaybackDiagnosticsPanel
+                playerDiagnostics={playerDiagnostics}
+                runtimeDiagnostics={runtimeDiagnostics}
+              />
               {error ? <p className="error-text">{error}</p> : null}
               {settingsError ? <p className="error-text">{settingsError}</p> : null}
             </aside>
@@ -524,6 +630,7 @@ export function App() {
                   renderError={scoreRenderState.error}
                   renderScore={scoreRenderState.renderScore}
                   score={scoreRenderState.score}
+                  onPlaybackMetrics={recordOverlayMetrics}
                   onSeek={seekTo}
                 />
               ) : (
@@ -593,11 +700,79 @@ export function App() {
   );
 }
 
+function PlaybackDiagnosticsPanel({
+  playerDiagnostics,
+  runtimeDiagnostics
+}: {
+  playerDiagnostics: PlayerDiagnostics;
+  runtimeDiagnostics: PlaybackRuntimeDiagnostics;
+}) {
+  return (
+    <section className="playback-diagnostics" aria-label="播放诊断">
+      <h2>播放诊断</h2>
+      <dl>
+        <div>
+          <dt>输出</dt>
+          <dd>{formatOutputMode(playerDiagnostics.outputMode)}</dd>
+        </div>
+        <div>
+          <dt>脚本</dt>
+          <dd>{formatDuration(playerDiagnostics.alphaSynthScriptLoadMs)}</dd>
+        </div>
+        <div>
+          <dt>Synth</dt>
+          <dd>{formatDuration(playerDiagnostics.synthReadyMs)}</dd>
+        </div>
+        <div>
+          <dt>SF2</dt>
+          <dd>{formatDuration(playerDiagnostics.soundFontLoadMs)}</dd>
+        </div>
+        <div>
+          <dt>MIDI</dt>
+          <dd>{formatDuration(playerDiagnostics.midiLoadMs)}</dd>
+        </div>
+        <div>
+          <dt>解析</dt>
+          <dd>{formatDuration(runtimeDiagnostics.midiParseWorkerMs)}</dd>
+        </div>
+        <div>
+          <dt>谱面</dt>
+          <dd>{formatDuration(runtimeDiagnostics.scoreRenderWorkerMs)}</dd>
+        </div>
+        <div>
+          <dt>Long task</dt>
+          <dd>
+            {runtimeDiagnostics.longTaskCount} / {formatDuration(runtimeDiagnostics.longestLongTaskMs)}
+          </dd>
+        </div>
+        <div>
+          <dt>Snapshot</dt>
+          <dd>{runtimeDiagnostics.snapshotCommitCount}</dd>
+        </div>
+        <div>
+          <dt>Overlay</dt>
+          <dd>
+            {runtimeDiagnostics.overlayUpdateCount} / {formatDuration(runtimeDiagnostics.overlayLookupMs)} /{" "}
+            {runtimeDiagnostics.overlayEventCount}
+          </dd>
+        </div>
+        <div>
+          <dt>错误</dt>
+          <dd>{playerDiagnostics.lastErrorType ?? "-"}</dd>
+        </div>
+      </dl>
+      {playerDiagnostics.fallbackReason ? (
+        <p>{playerDiagnostics.fallbackReason}</p>
+      ) : null}
+    </section>
+  );
+}
+
 function parseMidiInWorker(
   buffer: ArrayBuffer,
   fileName: string,
   requestId: number
-): Promise<ParsedSong> {
+): Promise<MidiParseResult> {
   return new Promise((resolve, reject) => {
     const worker = new Worker(new URL("./workers/midiParseWorker.ts", import.meta.url), {
       type: "module"
@@ -616,7 +791,10 @@ function parseMidiInWorker(
 
       cleanup();
       if (event.data.status === "success") {
-        resolve(event.data.song);
+        resolve({
+          song: event.data.song,
+          durationMs: event.data.durationMs
+        });
       } else {
         reject(new Error(event.data.message));
       }
@@ -655,6 +833,32 @@ function shouldCommitPlayerSnapshot(left: PlayerSnapshot, right: PlayerSnapshot)
   }
 
   return Math.abs(right.positionMs - left.positionMs) >= PLAYBACK_SNAPSHOT_INTERVAL_MS;
+}
+
+function formatDuration(value: number | undefined): string {
+  if (value === undefined) {
+    return "-";
+  }
+
+  if (value >= 1000) {
+    return `${(value / 1000).toFixed(1)}s`;
+  }
+
+  return `${Math.round(value)}ms`;
+}
+
+function formatOutputMode(outputMode: PlayerDiagnostics["outputMode"]): string {
+  switch (outputMode) {
+    case "audio-worklet":
+      return "AudioWorklet";
+    case "script-processor":
+      return "ScriptProcessor";
+    case "pure-web-audio":
+      return "纯 WebAudio";
+    case "unknown":
+    default:
+      return "-";
+  }
 }
 
 function formatPlayerStatus(snapshot: PlayerSnapshot): string {

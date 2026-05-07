@@ -1,5 +1,11 @@
 import type { MidiNote } from "./midi";
-import type { MidiPlaybackEngine, PlayerLoadInput, PlayerSnapshot, PlayerStatus } from "./player/types";
+import type {
+  MidiPlaybackEngine,
+  PlayerDiagnostics,
+  PlayerLoadInput,
+  PlayerSnapshot,
+  PlayerStatus
+} from "./player/types";
 
 type ScheduledVoice = {
   oscillator: OscillatorNode;
@@ -21,6 +27,11 @@ export class SynthPlayer implements MidiPlaybackEngine {
   private schedulerId = 0;
   private scheduledVoices = new Set<ScheduledVoice>();
   private listeners = new Set<(snapshot: PlayerSnapshot) => void>();
+  private diagnosticsListeners = new Set<(diagnostics: PlayerDiagnostics) => void>();
+  private diagnostics: PlayerDiagnostics = {
+    engine: "basic-midi",
+    outputMode: "pure-web-audio"
+  };
 
   load(input: PlayerLoadInput): void {
     this.stopScheduler();
@@ -129,9 +140,22 @@ export class SynthPlayer implements MidiPlaybackEngine {
     };
   }
 
+  getDiagnostics(): PlayerDiagnostics {
+    return this.diagnostics;
+  }
+
+  subscribeDiagnostics(listener: (diagnostics: PlayerDiagnostics) => void): () => void {
+    this.diagnosticsListeners.add(listener);
+    listener(this.getDiagnostics());
+    return () => {
+      this.diagnosticsListeners.delete(listener);
+    };
+  }
+
   dispose(): void {
     this.stop();
     this.listeners.clear();
+    this.diagnosticsListeners.clear();
     void this.audioContext?.close();
     this.audioContext = null;
     this.masterGain = null;

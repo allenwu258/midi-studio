@@ -19,6 +19,19 @@ export type PlayerSnapshot = {
   error?: string;
 };
 
+export type PlayerOutputMode = "audio-worklet" | "script-processor" | "pure-web-audio" | "unknown";
+
+export type PlayerDiagnostics = {
+  engine: PlaybackEngineMode;
+  outputMode: PlayerOutputMode;
+  fallbackReason?: string;
+  alphaSynthScriptLoadMs?: number;
+  synthReadyMs?: number;
+  soundFontLoadMs?: number;
+  midiLoadMs?: number;
+  lastErrorType?: string;
+};
+
 export type PlayerLoadInput = {
   midiBytes: ArrayBuffer;
   notes: MidiNote[];
@@ -36,6 +49,8 @@ export interface MidiPlaybackEngine {
   dispose(): void;
   getSnapshot(): PlayerSnapshot;
   subscribe(listener: (snapshot: PlayerSnapshot) => void): () => void;
+  getDiagnostics(): PlayerDiagnostics;
+  subscribeDiagnostics(listener: (diagnostics: PlayerDiagnostics) => void): () => void;
 }
 
 export type PlayerFactoryOptions = {
