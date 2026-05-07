@@ -14,14 +14,24 @@ import type {
 } from "./types";
 
 const BASELINE_VOICE_LIMIT = 2;
+const GRAND_STAFF_SPLIT_MIDI = 60;
+const PIANO_PROGRAM_MIN = 0;
+const PIANO_PROGRAM_MAX = 7;
+
+type PartSource = {
+  id: string;
+  name: string;
+  tracks: ParsedTrack[];
+  notes: MidiNote[];
+  program: number;
+  isDrum: boolean;
+};
 
 export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDraftInput): ScoreDraft {
   const diagnostics: ScoreDiagnostic[] = [];
   const measures = createMeasureMap(song.meta, diagnostics);
   const gridTicks = shortestNoteTicks(song.meta.ppq, shortestNote);
-  const parts = song.tracks
-    .filter((track) => track.noteCount > 0)
-    .map((track) => createPart(song, track, gridTicks, diagnostics));
+  const parts = createPartSources(song).map((source) => createPart(song, source, gridTicks, diagnostics));
 
   if (!song.meta.keySignatures.length) {
     diagnostics.push({
@@ -51,33 +61,130 @@ export function createScoreDraft({ song, shortestNote = "1/16" }: CreateScoreDra
 
 function createPart(
   song: ParsedSong,
-  track: ParsedTrack,
+  source: PartSource,
   gridTicks: number,
   diagnostics: ScoreDiagnostic[]
 ): ScorePart {
-  const sourceNotes = song.notes.filter((note) => note.trackIndex === track.index);
+  const sourceNotes = source.notes;
   const averagePitch =
     sourceNotes.reduce((sum, note) => sum + note.midi, 0) / Math.max(1, sourceNotes.length);
-  const clef = chooseClefForTrack(averagePitch, track.isDrum);
-  const quantizedNotes = sourceNotes.map((note) => quantizeNote(note, gridTicks, 0));
-  const chordEvents = createChordEvents(`part-${track.index}`, quantizedNotes, song.meta.ppq);
-  const voiceCount = assignVoices(chordEvents, track.index, diagnostics);
+  const useGrandStaff = shouldUseGrandStaff(source);
+  const quantizedNotes = sourceNotes.map((note) =>
+    quantizeNote(note, gridTicks, useGrandStaff && note.midi < GRAND_STAFF_SPLIT_MIDI ? 1 : 0)
+  );
+  const chordEvents = createChordEvents(source.id, quantizedNotes, song.meta.ppq);
+  const firstTrackIndex = source.tracks[0]?.index ?? 0;
+  const trebleChords = chordEvents.filter((chord) => chord.staffIndex === 0);
+  const bassChords = chordEvents.filter((chord) => chord.staffIndex === 1);
+  const trebleVoiceCount = assignVoices(trebleChords, firstTrackIndex, diagnostics);
+  const bassVoiceCount = assignVoices(bassChords, firstTrackIndex, diagnostics);
+  const staves = useGrandStaff
+    ? [
+        {
+          index: 0,
+          clef: "treble" as const,
+          voiceCount: trebleVoiceCount,
+          events: trebleChords
+        },
+        {
+          index: 1,
+          clef: "bass" as const,
+          voiceCount: bassVoiceCount,
+          events: bassChords
+        }
+      ]
+    : [
+        {
+          index: 0,
+          clef: chooseClefForTrack(averagePitch, source.isDrum),
+          voiceCount: trebleVoiceCount,
+          events: trebleChords
+        }
+      ];
 
   return {
-    id: `part-${track.index}`,
-    name: track.name || track.instrumentName || `Track ${track.index + 1}`,
-    sourceTrackIndex: track.index,
-    program: track.program,
-    isDrum: track.isDrum,
-    staves: [
-      {
-        index: 0,
-        clef,
-        voiceCount,
-        events: chordEvents
-      }
-    ]
+    id: source.id,
+    name: source.name,
+    sourceTrackIndex: firstTrackIndex,
+    sourceTrackIndexes: source.tracks.map((track) => track.index),
+    program: source.program,
+    isDrum: source.isDrum,
+    staves
   };
+}
+
+function createPartSources(song: ParsedSong): PartSource[] {
+  const sources = new Map<string, PartSource>();
+
+  for (const track of song.tracks.filter((item) => item.noteCount > 0)) {
+    const notes = song.notes.filter((note) => note.trackIndex === track.index);
+    const key = partSourceKey(track);
+    const existing = sources.get(key);
+
+    if (existing) {
+      existing.tracks.push(track);
+      existing.notes.push(...notes);
+      existing.name = bestPartName(existing.name, track);
+      continue;
+    }
+
+    sources.set(key, {
+      id: `part-${sources.size}`,
+      name: track.name || track.instrumentName || `Track ${track.index + 1}`,
+      tracks: [track],
+      notes,
+      program: track.program,
+      isDrum: track.isDrum
+    });
+  }
+
+  return [...sources.values()].map((source) => ({
+    ...source,
+    notes: source.notes.sort((a, b) => a.startTicks - b.startTicks || a.midi - b.midi)
+  }));
+}
+
+function partSourceKey(track: ParsedTrack): string {
+  if (track.isDrum) {
+    return `drum:${track.index}`;
+  }
+
+  if (isPianoProgram(track.program)) {
+    return `piano:${track.program}`;
+  }
+
+  return `track:${track.index}`;
+}
+
+function bestPartName(currentName: string, track: ParsedTrack): string {
+  const candidate = track.name || track.instrumentName;
+  if (!candidate) {
+    return currentName;
+  }
+  if (/^track\s+\d+$/i.test(currentName)) {
+    return candidate;
+  }
+  return currentName;
+}
+
+function isPianoProgram(program: number): boolean {
+  return program >= PIANO_PROGRAM_MIN && program <= PIANO_PROGRAM_MAX;
+}
+
+function shouldUseGrandStaff(source: PartSource): boolean {
+  if (source.isDrum || source.notes.length === 0) {
+    return false;
+  }
+
+  const pitches = source.notes.map((note) => note.midi);
+  const minPitch = Math.min(...pitches);
+  const maxPitch = Math.max(...pitches);
+
+  return (
+    isPianoProgram(source.program) ||
+    source.tracks.length > 1 ||
+    (minPitch < GRAND_STAFF_SPLIT_MIDI && maxPitch >= GRAND_STAFF_SPLIT_MIDI && maxPitch - minPitch >= 18)
+  );
 }
 
 function quantizeNote(note: MidiNote, gridTicks: number, staffIndex: number): QuantizedNote {

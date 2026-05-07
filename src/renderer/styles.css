@@ -227,6 +227,19 @@ h3 {
   stroke: #607083;
 }
 
+.part-barlines .measure-bar {
+  stroke: #253342;
+  stroke-width: 1.2;
+}
+
+.grand-staff-brace {
+  fill: none;
+  stroke: #1f2d3d;
+  stroke-linecap: round;
+  stroke-width: 2.2;
+  vector-effect: non-scaling-stroke;
+}
+
 .staff-part-name {
   fill: #536273;
   font-family: Inter, "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
@@ -275,6 +288,13 @@ h3 {
   vector-effect: non-scaling-stroke;
 }
 
+.beam-line {
+  stroke: #202d3b;
+  stroke-linecap: butt;
+  stroke-width: 5.2;
+  vector-effect: non-scaling-stroke;
+}
+
 .accidental {
   fill: #526171;
   font-family: Georgia, "Times New Roman", serif;
@@ -301,6 +321,11 @@ h3 {
 
 .score-event.active .note-stem,
 .score-event.active .tie-mark {
+  stroke: #087c73;
+}
+
+.beam-group.active .beam-line,
+.beam-group.active .note-stem {
   stroke: #087c73;
 }
 

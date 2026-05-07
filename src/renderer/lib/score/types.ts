@@ -72,6 +72,7 @@ export type ScorePart = {
   id: string;
   name: string;
   sourceTrackIndex: number;
+  sourceTrackIndexes: number[];
   program: number;
   isDrum: boolean;
   staves: ScoreStaff[];
