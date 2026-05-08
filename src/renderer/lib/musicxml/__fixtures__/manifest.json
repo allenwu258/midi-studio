@@ -1,0 +1,65 @@
+{
+  "fixtures": [
+    {
+      "name": "basic-scale.musicxml",
+      "file": "basic-scale.musicxml",
+      "sourceFormat": "xml",
+      "expected": {
+        "noteCount": 4,
+        "trackCount": 1,
+        "durationTicks": 1920,
+        "durationMs": 2000,
+        "scorePartCount": 1
+      }
+    },
+    {
+      "name": "chord-rest.musicxml",
+      "file": "chord-rest.musicxml",
+      "sourceFormat": "xml",
+      "expected": {
+        "noteCount": 4,
+        "trackCount": 1,
+        "durationTicks": 1920,
+        "durationMs": 2000,
+        "scorePartCount": 1
+      }
+    },
+    {
+      "name": "backup-forward-voices-grand-staff.musicxml",
+      "file": "backup-forward-voices-grand-staff.musicxml",
+      "sourceFormat": "xml",
+      "expected": {
+        "noteCount": 5,
+        "trackCount": 1,
+        "durationTicks": 1920,
+        "durationMs": 2000,
+        "scorePartCount": 1,
+        "maxStaffCount": 2
+      }
+    },
+    {
+      "name": "tie-tempo-key-time-change.musicxml",
+      "file": "tie-tempo-key-time-change.musicxml",
+      "sourceFormat": "xml",
+      "expected": {
+        "noteCount": 2,
+        "trackCount": 1,
+        "durationTicks": 3360,
+        "durationMs": 5000,
+        "scorePartCount": 1
+      }
+    },
+    {
+      "name": "basic-scale.mxl",
+      "file": "basic-scale.musicxml",
+      "sourceFormat": "mxl",
+      "expected": {
+        "noteCount": 4,
+        "trackCount": 1,
+        "durationTicks": 1920,
+        "durationMs": 2000,
+        "scorePartCount": 1
+      }
+    }
+  ]
+}

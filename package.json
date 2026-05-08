@@ -21,7 +21,8 @@
     "dist:portable": "npm run build && cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.electron.json --noEmit",
-    "validate:score-fixtures": "node scripts/validate-score-fixtures.mjs"
+    "validate:score-fixtures": "node scripts/validate-score-fixtures.mjs",
+    "validate:musicxml-fixtures": "node scripts/validate-musicxml-fixtures.mjs"
   },
   "dependencies": {
     "@tonejs/midi": "^2.0.28",
