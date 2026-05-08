@@ -11,11 +11,11 @@ type ScoreRenderWorkerScope = {
 const workerScope = self as unknown as ScoreRenderWorkerScope;
 
 workerScope.onmessage = (event) => {
-  const { requestId, song } = event.data;
+  const { requestId, song, score: sourceScore } = event.data;
   const startedAt = performance.now();
 
   try {
-    const score = createScoreDraft({ song });
+    const score = sourceScore ?? createScoreDraft({ song });
     const renderScore = layoutScore(score);
     const playbackMap = buildPlaybackMap(score);
 

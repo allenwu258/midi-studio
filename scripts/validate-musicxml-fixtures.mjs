@@ -23,10 +23,9 @@ try {
   });
 
   const { parseMusicXmlFile } = await server.ssrLoadModule("/src/renderer/lib/musicxml/parseMusicXml.ts");
-  const { createScoreDraft } = await server.ssrLoadModule("/src/renderer/lib/score/createScoreDraft.ts");
 
   for (const fixture of manifest.fixtures ?? []) {
-    await validateFixture(fixture, parseMusicXmlFile, createScoreDraft);
+    await validateFixture(fixture, parseMusicXmlFile);
   }
 } catch (error) {
   failures.push(`Unable to validate MusicXML fixtures: ${error.message}`);
@@ -43,11 +42,11 @@ if (failures.length) {
 
 console.log("musicxml fixture validation: ok");
 
-async function validateFixture(fixture, parseMusicXmlFile, createScoreDraft) {
+async function validateFixture(fixture, parseMusicXmlFile) {
   const { buffer, fileName } = await readFixtureBuffer(fixture);
   const result = await parseMusicXmlFile(buffer, fileName);
   const song = result.song;
-  const score = createScoreDraft({ song });
+  const score = result.score;
   const prefix = join("src/renderer/lib/musicxml/__fixtures__", fixture.name);
 
   assert(prefix, result.sourceFormat === fixture.sourceFormat, `expected sourceFormat ${fixture.sourceFormat}, got ${result.sourceFormat}`);
@@ -76,10 +75,65 @@ async function validateFixture(fixture, parseMusicXmlFile, createScoreDraft) {
     assert(prefix, score.parts.length === fixture.expected.scorePartCount, `expected ${fixture.expected.scorePartCount} score parts, got ${score.parts.length}`);
   }
 
+  if (fixture.expected.tempoCount !== undefined) {
+    assert(prefix, song.meta.tempos.length === fixture.expected.tempoCount, `expected ${fixture.expected.tempoCount} tempos, got ${song.meta.tempos.length}`);
+  }
+
+  if (fixture.expected.keySignatureCount !== undefined) {
+    assert(
+      prefix,
+      song.meta.keySignatures.length === fixture.expected.keySignatureCount,
+      `expected ${fixture.expected.keySignatureCount} key signatures, got ${song.meta.keySignatures.length}`
+    );
+  }
+
+  if (fixture.expected.timeSignatureCount !== undefined) {
+    assert(
+      prefix,
+      song.meta.timeSignatures.length === fixture.expected.timeSignatureCount,
+      `expected ${fixture.expected.timeSignatureCount} time signatures, got ${song.meta.timeSignatures.length}`
+    );
+  }
+
+  if (fixture.expected.measureTimeSignatures !== undefined) {
+    const actual = score.measures.map((measure) => `${measure.numerator}/${measure.denominator}`);
+    assert(
+      prefix,
+      JSON.stringify(actual) === JSON.stringify(fixture.expected.measureTimeSignatures),
+      `expected measure time signatures ${JSON.stringify(fixture.expected.measureTimeSignatures)}, got ${JSON.stringify(actual)}`
+    );
+  }
+
   if (fixture.expected.maxStaffCount !== undefined) {
     const maxStaffCount = Math.max(...score.parts.map((part) => part.staves.length));
     assert(prefix, maxStaffCount === fixture.expected.maxStaffCount, `expected max staff count ${fixture.expected.maxStaffCount}, got ${maxStaffCount}`);
   }
+
+  if (fixture.expected.scoreChordCount !== undefined) {
+    const chordCount = countScoreEvents(score, "chord");
+    assert(prefix, chordCount === fixture.expected.scoreChordCount, `expected ${fixture.expected.scoreChordCount} score chords, got ${chordCount}`);
+  }
+
+  if (fixture.expected.scoreRestCount !== undefined) {
+    const restCount = countScoreEvents(score, "rest");
+    assert(prefix, restCount === fixture.expected.scoreRestCount, `expected ${fixture.expected.scoreRestCount} score rests, got ${restCount}`);
+  }
+
+  if (fixture.expected.tupletCount !== undefined) {
+    assert(prefix, score.tuplets.length === fixture.expected.tupletCount, `expected ${fixture.expected.tupletCount} tuplets, got ${score.tuplets.length}`);
+  }
+}
+
+function countScoreEvents(score, kind) {
+  return score.parts.reduce(
+    (sum, part) =>
+      sum +
+      part.staves.reduce(
+        (staffSum, staff) => staffSum + staff.events.filter((event) => event.kind === kind).length,
+        0
+      ),
+    0
+  );
 }
 
 async function readFixtureBuffer(fixture) {

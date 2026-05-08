@@ -1,5 +1,6 @@
 import type { ParsedSong } from "../lib/midi";
 import type { MusicXmlImportDiagnostic } from "../lib/musicxml";
+import type { ScoreDraft } from "../lib/score";
 
 export type MusicXmlParseRequest = {
   requestId: number;
@@ -14,6 +15,7 @@ export type MusicXmlParseSuccess = {
   sourceFormat: "xml" | "mxl";
   song: ParsedSong;
   midiBytes: ArrayBuffer;
+  score: ScoreDraft;
   diagnostics: MusicXmlImportDiagnostic[];
 };
 
@@ -25,4 +27,3 @@ export type MusicXmlParseFailure = {
 };
 
 export type MusicXmlParseResponse = MusicXmlParseSuccess | MusicXmlParseFailure;
-

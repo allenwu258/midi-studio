@@ -1,8 +1,20 @@
 import JSZip from "jszip";
 import { DOMParser as XmlDomParser } from "@xmldom/xmldom";
-import { buildMidiBytes } from "./midiWriter";
+import { buildMidiBytes } from "./toMidi";
+import { toScoreDraft } from "./toScoreDraft";
 import type { MidiNote, ParsedMidiMeta, ParsedSong, ParsedTrack } from "../midi";
-import type { MusicXmlImportDiagnostic, MusicXmlImportResult } from "./types";
+import type {
+  MusicXmlClefSign,
+  MusicXmlImportDiagnostic,
+  MusicXmlImportResult,
+  MusicXmlMeasureAttributes,
+  MusicXmlScoreChord,
+  MusicXmlScoreEvent,
+  MusicXmlScoreMeasure,
+  MusicXmlScoreNote,
+  MusicXmlScorePart,
+  MusicXmlScoreSource
+} from "./types";
 
 const DEFAULT_PPQ = 480;
 const DEFAULT_BPM = 120;
@@ -23,6 +35,7 @@ type ParsedMeasureState = {
   lengthTicks: number;
   divisions: number;
   timeSignature: { numerator: number; denominator: number };
+  keySignature: { key: string; scale: string };
 };
 
 type PendingTempo = {
@@ -42,15 +55,23 @@ type PendingKeySignature = {
   scale: string;
 };
 
+type ParsedMusicXmlDocument = {
+  song: ParsedSong;
+  sourceScore: MusicXmlScoreSource;
+};
+
 export async function parseMusicXmlFile(buffer: ArrayBuffer, fileName: string): Promise<MusicXmlImportResult> {
   const { xmlText, sourceFormat } = await readMusicXmlText(buffer, fileName);
   const document = parseXmlDocument(xmlText, fileName);
   const diagnostics: MusicXmlImportDiagnostic[] = [];
-  const song = parseMusicXmlDocument(document, fileName, diagnostics);
+  const { song, sourceScore } = parseMusicXmlDocument(document, fileName, diagnostics);
+  const score = toScoreDraft(sourceScore);
 
   return {
     song,
     midiBytes: buildMidiBytes(song),
+    score,
+    sourceScore,
     diagnostics,
     sourceFormat
   };
@@ -91,7 +112,7 @@ function parseMusicXmlDocument(
   document: Document,
   fileName: string,
   diagnostics: MusicXmlImportDiagnostic[]
-): ParsedSong {
+): ParsedMusicXmlDocument {
   const root = document.documentElement;
   if (!root || root.nodeName !== "score-partwise") {
     throw new Error("仅支持 MusicXML score-partwise 文件。");
@@ -102,6 +123,8 @@ function parseMusicXmlDocument(
   const parts = Array.from(root.children).filter((child) => child.nodeName === "part") as Element[];
   const notes: MidiNote[] = [];
   const tracks: ParsedTrack[] = [];
+  const sourceParts: MusicXmlScorePart[] = [];
+  let sourceMeasures: MusicXmlScoreMeasure[] = [];
   const tempos: PendingTempo[] = [];
   const timeSignatures: PendingTimeSignature[] = [];
   const keySignatures: PendingKeySignature[] = [];
@@ -124,6 +147,10 @@ function parseMusicXmlDocument(
 
     tracks.push(partResult.track);
     notes.push(...partResult.notes);
+    sourceParts.push(partResult.sourcePart);
+    if (partResult.measures.length > sourceMeasures.length) {
+      sourceMeasures = partResult.measures;
+    }
     durationTicks = Math.max(durationTicks, partResult.durationTicks);
   }
 
@@ -144,10 +171,11 @@ function parseMusicXmlDocument(
     keySignatures: normalizedKeySignatures
   };
   applyNoteTimes(notes, normalizedTempos, ppq);
+  const title = findScoreTitle(root) || stripExtension(fileName) || "Untitled MusicXML";
   const song: ParsedSong = {
     id: `${fileName}-${Date.now()}`,
     fileName,
-    title: findScoreTitle(root) || stripExtension(fileName) || "Untitled MusicXML",
+    title,
     keyName: formatKeyName(normalizedKeySignatures[0] ?? FALLBACK_KEY_SIGNATURE),
     bpm: normalizedTempos[0]?.bpm ?? null,
     durationMs: ticksToMs(durationTicks, normalizedTempos, ppq),
@@ -158,7 +186,23 @@ function parseMusicXmlDocument(
     meta
   };
 
-  return song;
+  const sourceScore: MusicXmlScoreSource = {
+    id: song.id,
+    title,
+    ppq,
+    durationMs: song.durationMs,
+    durationTicks,
+    measures: sourceMeasures.map((measure) => ({
+      ...measure,
+      endTicks: Math.min(measure.endTicks, durationTicks)
+    })),
+    parts: sourceParts.map((part) => ({
+      ...part,
+      events: applySourceEventTimes(part.events, normalizedTempos, ppq)
+    }))
+  };
+
+  return { song, sourceScore };
 }
 
 function applyNoteTimes(notes: MidiNote[], tempos: ParsedMidiMeta["tempos"], ppq: number): void {
@@ -172,6 +216,18 @@ function applyNoteTimes(notes: MidiNote[], tempos: ParsedMidiMeta["tempos"], ppq
   }
 }
 
+function applySourceEventTimes(
+  events: MusicXmlScoreEvent[],
+  tempos: ParsedMidiMeta["tempos"],
+  ppq: number
+): MusicXmlScoreEvent[] {
+  return events.map((event) => ({
+    ...event,
+    startMs: ticksToMs(event.startTicks, tempos, ppq),
+    endMs: ticksToMs(event.endTicks, tempos, ppq)
+  }));
+}
+
 function parsePart(
   partElement: Element,
   partIndex: number,
@@ -181,8 +237,11 @@ function parsePart(
   timeSignatures: PendingTimeSignature[],
   keySignatures: PendingKeySignature[],
   diagnostics: MusicXmlImportDiagnostic[]
-): { track: ParsedTrack; notes: MidiNote[]; durationTicks: number } {
+): { track: ParsedTrack; notes: MidiNote[]; durationTicks: number; sourcePart: MusicXmlScorePart; measures: MusicXmlScoreMeasure[] } {
   const notes: MidiNote[] = [];
+  const sourceEvents: MusicXmlScoreEvent[] = [];
+  const measures: MusicXmlScoreMeasure[] = [];
+  const clefs = new Map<number, { staffIndex: number; sign: MusicXmlClefSign; line: number | null }>();
   const measureElements = Array.from(partElement.children).filter((child) => child.nodeName === "measure") as Element[];
   const resolvedPartInfo = {
     ...partInfo,
@@ -191,6 +250,7 @@ function parsePart(
   let measureStartTicks = 0;
   let currentDivisions = 1;
   let currentTimeSignature = { ...FALLBACK_TIME_SIGNATURE };
+  let currentKeySignature = { ...FALLBACK_KEY_SIGNATURE };
   let maxTick = 0;
 
   for (let measureIndex = 0; measureIndex < measureElements.length; measureIndex += 1) {
@@ -199,7 +259,8 @@ function parsePart(
       startTicks: measureStartTicks,
       lengthTicks: ticksPerMeasure(ppq, currentTimeSignature.numerator, currentTimeSignature.denominator),
       divisions: currentDivisions,
-      timeSignature: { ...currentTimeSignature }
+      timeSignature: { ...currentTimeSignature },
+      keySignature: { ...currentKeySignature }
     };
     const parseResult = parseMeasure(
       measureElement,
@@ -215,10 +276,16 @@ function parsePart(
     );
 
     notes.push(...parseResult.notes);
+    sourceEvents.push(...parseResult.sourceEvents);
+    measures.push(parseResult.measure);
+    for (const clef of parseResult.measure.attributes.clefs) {
+      clefs.set(clef.staffIndex, clef);
+    }
     maxTick = Math.max(maxTick, parseResult.maxTick);
 
     currentDivisions = parseResult.nextDivisions;
     currentTimeSignature = parseResult.nextTimeSignature;
+    currentKeySignature = parseResult.nextKeySignature;
     measureStartTicks += measureState.lengthTicks;
   }
 
@@ -244,7 +311,22 @@ function parsePart(
   return {
     track,
     notes: partNotes,
-    durationTicks: maxTick
+    durationTicks: maxTick,
+    sourcePart: {
+      id: resolvedPartInfo.id,
+      name: resolvedPartInfo.name,
+      sourceTrackIndex: partIndex,
+      program: resolvedPartInfo.program,
+      isDrum: resolvedPartInfo.isDrum,
+      staves: Math.max(
+        1,
+        ...measures.map((measure) => measure.attributes.staves),
+        ...sourceEvents.map((event) => event.staffIndex)
+      ),
+      clefs: [...clefs.values()],
+      events: sourceEvents
+    },
+    measures
   };
 }
 
@@ -261,18 +343,26 @@ function parseMeasure(
   diagnostics: MusicXmlImportDiagnostic[]
 ): {
   notes: MidiNote[];
+  sourceEvents: MusicXmlScoreEvent[];
+  measure: MusicXmlScoreMeasure;
   maxTick: number;
   nextDivisions: number;
   nextTimeSignature: { numerator: number; denominator: number };
+  nextKeySignature: { key: string; scale: string };
 } {
   const notes: MidiNote[] = [];
+  const sourceEvents: MusicXmlScoreEvent[] = [];
   const localPositions = new Map<string, number>();
   const lastStartTicks = new Map<string, number>();
   const lastDurationTicks = new Map<string, number>();
+  const lastSourceChord = new Map<string, MusicXmlScoreChord>();
   let cursorTicks = 0;
   let maxTick = measureState.startTicks;
   let currentDivisions = measureState.divisions;
   let currentTimeSignature = measureState.timeSignature;
+  let currentKeySignature = measureState.keySignature;
+  let currentStaves = 1;
+  const currentClefs = new Map<number, { staffIndex: number; sign: MusicXmlClefSign; line: number | null }>();
   let sawContent = false;
 
   for (const child of Array.from(measureElement.children)) {
@@ -299,11 +389,17 @@ function parseMeasure(
 
         const keySignature = parseKeySignature(child);
         if (keySignature) {
+          currentKeySignature = keySignature;
+          measureState.keySignature = keySignature;
           keySignatures.push({
             ticks: measureState.startTicks + cursorTicks,
             key: keySignature.key,
             scale: keySignature.scale
           });
+        }
+        currentStaves = parseStaves(child) ?? currentStaves;
+        for (const clef of parseClefs(child)) {
+          currentClefs.set(clef.staffIndex, clef);
         }
         break;
       }
@@ -352,6 +448,23 @@ function parseMeasure(
             lastStartTicks.set(parsed.voiceStaffKey, parsed.note.startTicks);
             lastDurationTicks.set(parsed.voiceStaffKey, parsed.durationTicks);
           }
+          if (parsed.sourceNote && parsed.note) {
+            if (parsed.isChord) {
+              const chord = lastSourceChord.get(parsed.voiceStaffKey);
+              if (chord) {
+                chord.notes.push(parsed.sourceNote);
+                chord.sourceNoteIds.push(parsed.note.id);
+                chord.tieStart = chord.tieStart || parsed.tieStart;
+                chord.tieStop = chord.tieStop || parsed.tieStop;
+              }
+            } else {
+              const chord = createSourceChord(partInfo.id, parsed);
+              sourceEvents.push(chord);
+              lastSourceChord.set(parsed.voiceStaffKey, chord);
+            }
+          } else if (parsed.isRest && !parsed.isChord) {
+            sourceEvents.push(createSourceRest(partInfo.id, parsed));
+          }
           if (!parsed.isChord) {
             cursorTicks += parsed.durationTicks;
             localPositions.set(parsed.voiceStaffKey, cursorTicks);
@@ -372,18 +485,47 @@ function parseMeasure(
 
   return {
     notes,
+    sourceEvents,
+    measure: {
+      id: `measure-${measureIndex}`,
+      index: measureIndex,
+      startTicks: measureState.startTicks,
+      endTicks: measureState.startTicks + measureState.lengthTicks,
+      attributes: {
+        divisions: currentDivisions,
+        timeSignature: measureState.timeSignature,
+        keySignature: currentKeySignature,
+        staves: currentStaves,
+        clefs: [...currentClefs.values()]
+      }
+    },
     maxTick,
     nextDivisions: currentDivisions,
-    nextTimeSignature: currentTimeSignature
+    nextTimeSignature: currentTimeSignature,
+    nextKeySignature: currentKeySignature
   };
 }
 
 type ParsedNoteResult = {
   note: MidiNote | null;
+  sourceNote: MusicXmlScoreNote | null;
   durationTicks: number;
+  startTicks: number;
+  endTicks: number;
+  measureIndex: number;
+  staffIndex: number;
+  voiceIndex: number;
+  durationName: ParsedNoteDurationName;
+  dots: 0 | 1 | 2;
+  timeModification?: { actualNotes: number; normalNotes: number };
+  tieStart: boolean;
+  tieStop: boolean;
+  isRest: boolean;
   isChord: boolean;
   voiceStaffKey: string;
 };
+
+type ParsedNoteDurationName = "whole" | "half" | "quarter" | "eighth" | "16th" | "32nd";
 
 function parseNote(
   noteElement: Element,
@@ -433,10 +575,26 @@ function parseNote(
     return null;
   }
 
+  const durationName = parseDurationName(noteElement, durationTicks, ppq, timeModification);
+  const dots = parseDots(noteElement);
+
   if (isRest) {
+    const startTicks = measureStartTicks + cursorTicks;
     return {
       note: null,
+      sourceNote: null,
       durationTicks,
+      startTicks,
+      endTicks: startTicks + durationTicks,
+      measureIndex,
+      staffIndex: staff,
+      voiceIndex: voice,
+      durationName,
+      dots,
+      timeModification,
+      tieStart: false,
+      tieStop: false,
+      isRest: true,
       isChord,
       voiceStaffKey
     };
@@ -453,10 +611,19 @@ function parseNote(
   const velocity = parseVelocity(noteElement);
   const tieStart = hasTie(noteElement, "start");
   const tieStop = hasTie(noteElement, "stop");
+  const noteId = `${partInfo.id}-${measureIndex}-${startTicks}-${pitch.midi}-${notesHash(noteElement)}`;
+  const sourceNote: MusicXmlScoreNote = {
+    sourceNoteId: noteId,
+    midi: pitch.midi,
+    step: pitch.step,
+    alter: normalizeAlter(pitch.alter),
+    octave: pitch.octave,
+    velocity
+  };
 
   return {
     note: {
-      id: `${partInfo.id}-${measureIndex}-${startTicks}-${pitch.midi}-${notesHash(noteElement)}`,
+      id: noteId,
       midi: pitch.midi,
       name: pitch.name,
       startMs: 0,
@@ -475,34 +642,92 @@ function parseNote(
       tieStart,
       tieStop
     },
+    sourceNote,
     durationTicks,
+    startTicks,
+    endTicks: startTicks + durationTicks,
+    measureIndex,
+    staffIndex: staff,
+    voiceIndex: voice,
+    durationName,
+    dots,
+    timeModification,
+    tieStart,
+    tieStop,
+    isRest: false,
     isChord,
     voiceStaffKey
   };
 }
 
-function parsePitch(noteElement: Element): { midi: number; name: string } | null {
+function createSourceChord(partId: string, parsed: ParsedNoteResult): MusicXmlScoreChord {
+  const baseId = `${partId}-m${parsed.startTicks}-${parsed.staffIndex}-${parsed.voiceIndex}`;
+  return {
+    id: `${baseId}-chord`,
+    baseId,
+    kind: "chord",
+    partId,
+    staffIndex: parsed.staffIndex,
+    voiceIndex: parsed.voiceIndex,
+    measureIndex: parsed.measureIndex,
+    startTicks: parsed.startTicks,
+    endTicks: parsed.endTicks,
+    startMs: 0,
+    endMs: 0,
+    durationName: parsed.durationName,
+    dots: parsed.dots,
+    timeModification: parsed.timeModification,
+    notes: parsed.sourceNote ? [parsed.sourceNote] : [],
+    sourceNoteIds: parsed.note ? [parsed.note.id] : [],
+    tieStart: parsed.tieStart,
+    tieStop: parsed.tieStop
+  };
+}
+
+function createSourceRest(partId: string, parsed: ParsedNoteResult): MusicXmlScoreEvent {
+  const baseId = `${partId}-m${parsed.startTicks}-${parsed.staffIndex}-${parsed.voiceIndex}-rest`;
+  return {
+    id: baseId,
+    baseId,
+    kind: "rest",
+    partId,
+    staffIndex: parsed.staffIndex,
+    voiceIndex: parsed.voiceIndex,
+    measureIndex: parsed.measureIndex,
+    startTicks: parsed.startTicks,
+    endTicks: parsed.endTicks,
+    startMs: 0,
+    endMs: 0,
+    durationName: parsed.durationName,
+    dots: parsed.dots,
+    timeModification: parsed.timeModification
+  };
+}
+
+function parsePitch(
+  noteElement: Element
+): { midi: number; name: string; step: "C" | "D" | "E" | "F" | "G" | "A" | "B"; alter: number; octave: number } | null {
   const pitchElement = findDirectChild(noteElement, "pitch");
   if (pitchElement) {
-    const step = findDirectChildText(pitchElement, "step");
+    const step = normalizeStep(findDirectChildText(pitchElement, "step"));
     const octave = textToInt(findDirectChildText(pitchElement, "octave"));
     if (!step || octave === null) {
       return null;
     }
     const alter = textToNumber(findDirectChildText(pitchElement, "alter")) ?? 0;
     const midi = pitchToMidi(step, alter, octave);
-    return { midi, name: `${step}${alterToText(alter)}${octave}` };
+    return { midi, name: `${step}${alterToText(alter)}${octave}`, step, alter, octave };
   }
 
   const unpitched = findDirectChild(noteElement, "unpitched");
   if (unpitched) {
-    const step = findDirectChildText(unpitched, "display-step");
+    const step = normalizeStep(findDirectChildText(unpitched, "display-step"));
     const octave = textToInt(findDirectChildText(unpitched, "display-octave"));
     if (!step || octave === null) {
       return null;
     }
     const midi = pitchToMidi(step, 0, octave);
-    return { midi, name: `${step}${octave}` };
+    return { midi, name: `${step}${octave}`, step, alter: 0, octave };
   }
 
   return null;
@@ -528,6 +753,46 @@ function parseTimeModification(noteElement: Element): { actualNotes: number; nor
     return { actualNotes, normalNotes };
   }
   return undefined;
+}
+
+function parseDurationName(
+  noteElement: Element,
+  durationTicks: number,
+  ppq: number,
+  timeModification: { actualNotes: number; normalNotes: number } | undefined
+): ParsedNoteDurationName {
+  const type = findDirectChildText(noteElement, "type").trim().toLowerCase();
+  switch (type) {
+    case "whole":
+    case "half":
+    case "quarter":
+    case "eighth":
+    case "16th":
+    case "32nd":
+      return type;
+    default:
+      return durationNameFromTicks(durationTicks || durationFromType(noteElement, timeModification, ppq), ppq);
+  }
+}
+
+function durationNameFromTicks(ticks: number, ppq: number): ParsedNoteDurationName {
+  const candidates: Array<{ name: ParsedNoteDurationName; ticks: number }> = [
+    { name: "whole", ticks: ppq * 4 },
+    { name: "half", ticks: ppq * 2 },
+    { name: "quarter", ticks: ppq },
+    { name: "eighth", ticks: ppq / 2 },
+    { name: "16th", ticks: ppq / 4 },
+    { name: "32nd", ticks: ppq / 8 }
+  ];
+
+  return candidates.reduce((best, candidate) =>
+    Math.abs(candidate.ticks - ticks) < Math.abs(best.ticks - ticks) ? candidate : best
+  ).name;
+}
+
+function parseDots(noteElement: Element): 0 | 1 | 2 {
+  const dots = Array.from(noteElement.children).filter((child) => child.nodeName === "dot").length;
+  return Math.max(0, Math.min(2, dots)) as 0 | 1 | 2;
 }
 
 function durationFromType(
@@ -576,6 +841,31 @@ function parseTimeSignature(attributesElement: Element): { numerator: number; de
     numerator: beats,
     denominator: beatType
   };
+}
+
+function parseStaves(attributesElement: Element): number | null {
+  const staves = textToInt(findDirectChildText(attributesElement, "staves"));
+  return staves && staves > 0 ? staves : null;
+}
+
+function parseClefs(attributesElement: Element): Array<{ staffIndex: number; sign: MusicXmlClefSign; line: number | null }> {
+  const clefs = Array.from(attributesElement.children).filter((child) => child.nodeName === "clef") as Element[];
+  return clefs.map((clef, index) => ({
+    staffIndex: Math.max(1, textToInt(clef.getAttribute("number")) || index + 1),
+    sign: parseClefSign(findDirectChildText(clef, "sign")),
+    line: textToInt(findDirectChildText(clef, "line"))
+  }));
+}
+
+function parseClefSign(value: string): MusicXmlClefSign {
+  const normalized = value.trim().toUpperCase();
+  if (normalized === "G" || normalized === "F" || normalized === "C") {
+    return normalized;
+  }
+  if (normalized === "PERCUSSION") {
+    return "percussion";
+  }
+  return "unknown";
 }
 
 function parseKeySignature(attributesElement: Element): { key: string; scale: string } | null {
@@ -790,6 +1080,29 @@ function pitchToMidi(step: string, alter: number, octave: number): number {
     B: 11
   };
   return (octave + 1) * 12 + (stepValue[step.toUpperCase()] ?? 0) + alter;
+}
+
+function normalizeStep(value: string): "C" | "D" | "E" | "F" | "G" | "A" | "B" | null {
+  const normalized = value.trim().toUpperCase();
+  return normalized === "C" ||
+    normalized === "D" ||
+    normalized === "E" ||
+    normalized === "F" ||
+    normalized === "G" ||
+    normalized === "A" ||
+    normalized === "B"
+    ? normalized
+    : null;
+}
+
+function normalizeAlter(value: number): -1 | 0 | 1 {
+  if (value > 0) {
+    return 1;
+  }
+  if (value < 0) {
+    return -1;
+  }
+  return 0;
 }
 
 function alterToText(alter: number): string {

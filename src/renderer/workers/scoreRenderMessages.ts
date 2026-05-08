@@ -6,6 +6,7 @@ import type { RenderScore } from "../lib/staff";
 export type ScoreRenderRequest = {
   requestId: number;
   song: ParsedSong;
+  score?: ScoreDraft;
 };
 
 export type ScoreRenderSuccess = {

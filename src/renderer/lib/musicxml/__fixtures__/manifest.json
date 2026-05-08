@@ -9,7 +9,9 @@
         "trackCount": 1,
         "durationTicks": 1920,
         "durationMs": 2000,
-        "scorePartCount": 1
+        "scorePartCount": 1,
+        "scoreChordCount": 4,
+        "scoreRestCount": 0
       }
     },
     {
@@ -21,7 +23,9 @@
         "trackCount": 1,
         "durationTicks": 1920,
         "durationMs": 2000,
-        "scorePartCount": 1
+        "scorePartCount": 1,
+        "scoreChordCount": 2,
+        "scoreRestCount": 1
       }
     },
     {
@@ -34,7 +38,8 @@
         "durationTicks": 1920,
         "durationMs": 2000,
         "scorePartCount": 1,
-        "maxStaffCount": 2
+        "maxStaffCount": 2,
+        "scoreChordCount": 5
       }
     },
     {
@@ -46,7 +51,27 @@
         "trackCount": 1,
         "durationTicks": 3360,
         "durationMs": 5000,
-        "scorePartCount": 1
+        "scorePartCount": 1,
+        "scoreChordCount": 2,
+        "tempoCount": 2,
+        "keySignatureCount": 2,
+        "timeSignatureCount": 2,
+        "measureTimeSignatures": ["4/4", "3/4"]
+      }
+    },
+    {
+      "name": "triplet-time-modification.musicxml",
+      "file": "triplet-time-modification.musicxml",
+      "sourceFormat": "xml",
+      "expected": {
+        "noteCount": 3,
+        "trackCount": 1,
+        "durationTicks": 1920,
+        "durationMs": 2000,
+        "scorePartCount": 1,
+        "scoreChordCount": 3,
+        "scoreRestCount": 1,
+        "tupletCount": 1
       }
     },
     {
@@ -58,7 +83,9 @@
         "trackCount": 1,
         "durationTicks": 1920,
         "durationMs": 2000,
-        "scorePartCount": 1
+        "scorePartCount": 1,
+        "scoreChordCount": 4,
+        "scoreRestCount": 0
       }
     }
   ]

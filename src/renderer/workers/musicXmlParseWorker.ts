@@ -22,6 +22,7 @@ workerScope.onmessage = (event) => {
           sourceFormat: result.sourceFormat,
           song: result.song,
           midiBytes: result.midiBytes,
+          score: result.score,
           diagnostics: result.diagnostics
         },
         [result.midiBytes]
@@ -36,4 +37,3 @@ workerScope.onmessage = (event) => {
       });
     });
 };
-

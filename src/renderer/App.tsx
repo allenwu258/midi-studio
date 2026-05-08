@@ -46,6 +46,7 @@ type MidiParseResult = {
 type MusicXmlParseResult = {
   song: ParsedSong;
   midiBytes: ArrayBuffer;
+  score: ScoreDraft;
   durationMs: number;
 };
 type ScoreRenderState =
@@ -109,6 +110,7 @@ export function App() {
   const snapshotStatusRef = useRef<PlayerSnapshot["status"]>(playerRef.current.getSnapshot().status);
   const overlayMetricsRef = useRef<OverlayMetricsAccumulator>({ ...DEFAULT_OVERLAY_METRICS });
   const [song, setSong] = useState<ParsedSong | null>(null);
+  const [musicXmlScore, setMusicXmlScore] = useState<ScoreDraft | null>(null);
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
   const [playerDiagnostics, setPlayerDiagnostics] = useState<PlayerDiagnostics>(() =>
     playerRef.current.getDiagnostics()
@@ -327,7 +329,7 @@ export function App() {
       });
     };
 
-    const request: ScoreRenderRequest = { requestId, song };
+    const request: ScoreRenderRequest = musicXmlScore ? { requestId, song, score: musicXmlScore } : { requestId, song };
     worker.postMessage(request);
 
     return () => {
@@ -336,7 +338,7 @@ export function App() {
         scoreRenderWorkerRef.current = null;
       }
     };
-  }, [song]);
+  }, [song, musicXmlScore]);
 
   const getPlaybackPosition = useCallback(() => playerRef.current.getSnapshot().positionMs, []);
 
@@ -376,7 +378,8 @@ export function App() {
         ? await parseMusicXmlInWorker(buffer, file.name, loadGeneration)
         : await parseMidiInWorker(buffer, file.name, loadGeneration);
       const parsedSong = parseResult.song;
-      const midiBytes = isMusicXml ? (parseResult as MusicXmlParseResult).midiBytes : sourceMidiBytes;
+      const musicXmlResult = isMusicXml ? (parseResult as MusicXmlParseResult) : null;
+      const midiBytes = musicXmlResult ? musicXmlResult.midiBytes : sourceMidiBytes;
 
       if (!midiBytes) {
         throw new Error("文件导入未生成可播放的 MIDI 数据。");
@@ -402,6 +405,7 @@ export function App() {
 
       loadingPlayer = playerRef.current;
       currentLoadInputRef.current = loadInput;
+      setMusicXmlScore(musicXmlResult?.score ?? null);
       setSong(parsedSong);
       loadingPlayer.setMasterVolume(settings.masterVolumePercent);
       setSpeed(settings.defaultSpeedPercent);
@@ -428,6 +432,7 @@ export function App() {
           : previousDiagnostics.musicXmlParseError
       }));
       setSong(null);
+      setMusicXmlScore(null);
       currentLoadInputRef.current = null;
       loadingPlayer.stop();
       setError(err instanceof Error ? err.message : "MIDI 或音频加载失败。");
@@ -1011,6 +1016,7 @@ function parseMusicXmlInWorker(
         resolve({
           song: event.data.song,
           midiBytes: event.data.midiBytes,
+          score: event.data.score,
           durationMs: event.data.durationMs
         });
       } else {
