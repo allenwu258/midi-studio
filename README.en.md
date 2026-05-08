@@ -3,15 +3,18 @@
 midi-studio is an open-source local-first desktop MIDI practice studio built
 with React, Electron, Vite, and TypeScript.
 
-The current version can open local MIDI files, parse them in a worker, play
-them through either a pure Web Audio fallback or a bundled alphaSynth + SF2
-engine, and render a structured staff-notation view synchronized with playback.
+The current version can open local MIDI and MusicXML files, parse them in
+workers, play them through either a pure Web Audio fallback or a bundled
+alphaSynth + SF2 engine, and render a structured staff-notation view
+synchronized with playback.
 
 Chinese README: [README.md](README.md)
 
 ## Current Status
 
 - Local `.mid` / `.midi` import.
+- Local `.xml` / `.musicxml` / `.mxl` import, with MusicXML parsing and score
+  preparation running off the main thread.
 - MIDI parsing through `@tonejs/midi` in a renderer worker.
 - alphaSynth + SF2 SoundFont playback, with AudioWorklet preference and
   ScriptProcessor fallback diagnostics.
@@ -26,6 +29,15 @@ Chinese README: [README.md](README.md)
   - duration spelling, rests, ties, and basic tuplets;
   - voice split window search;
   - playback map for score highlighting and seeking.
+- MusicXML import pipeline:
+  - preserves source voice/staff, note type/dots, tuplet/time-modification,
+    tie semantics, and measure attributes;
+  - builds `ScoreDraft` directly for notation while still generating MIDI
+    bytes for alphaSynth playback;
+  - supports compressed `.mxl` container extraction;
+  - `npm run validate:musicxml-fixtures` covers single voice, chords, rests,
+    backup/forward, multiple voices, grand staff, ties, tempo, key/time changes,
+    tuplets, and `.mxl`.
 - Staff renderer:
   - SVG staff systems, clefs, measures, notes, rests, ties, beams, tuplets;
   - time-slice spacing;
@@ -93,6 +105,7 @@ The portable build is written to `release/`, which is ignored by git.
 | `npm run preview` | Serves the built renderer bundle locally. |
 | `npm run typecheck` | Runs TypeScript checks for renderer and Electron code. |
 | `npm run validate:score-fixtures` | Validates checked-in score JSON fixtures. |
+| `npm run validate:musicxml-fixtures` | Validates checked-in MusicXML import fixtures. |
 
 ## Project Layout
 
@@ -175,6 +188,7 @@ and updating this documentation.
 - Improve quantization with broader tuplet candidates and fixture-driven
   penalty calibration.
 - Improve engraving geometry with stronger spacing and collision solving.
+- Expand MusicXML import coverage and score fidelity before export work.
 - Add MusicXML export from `ScoreDraft`.
 - Add piano keyboard visualization.
 - Add export workflows for score images/PDF and offline audio.

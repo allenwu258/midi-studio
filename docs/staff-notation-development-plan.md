@@ -1,12 +1,12 @@
 # Staff Notation Pipeline Development Plan
 
-本文档是 `codex/staff-notation-pipeline` 分支的功能开发规划和当前实现记录，覆盖：
+本文档是当前 MusicXML / 五线谱分支的功能开发规划和实现记录，覆盖：
 
 - MIDI 转五线谱结构化模型。
 - 五线谱渲染。
 - 播放位置到乐谱位置的映射。
-- MusicXML 导出预留。
-- 当前五线谱主链路和后续 MusicXML/export 预留。
+- MusicXML 导入已完成，导出仍预留。
+- 当前五线谱主链路、MusicXML 导入和后续 export 预留。
 
 详细算法背景见：
 
@@ -46,6 +46,10 @@ src/renderer/features/notation/StaffNotationPanel.tsx
 
 - 简谱 UI 和旧的内联 numbered notation 主路径已移除。
 - MIDI 解析和五线谱生成已搬到 Worker。
+- MusicXML `.xml` / `.musicxml` / `.mxl` 导入已落地，解析与谱面建模在独立 Worker 内完成。
+- MusicXML 导入会保留 source voice/staff、note type/dots、tuplet/time-modification、tie semantics 和 measure attributes。
+- MusicXML 谱面直接进入 `ScoreDraft`，播放仍输出 MIDI bytes 交给 alphaSynth。
+- `npm run validate:musicxml-fixtures` 已补齐，覆盖单声部、和弦、rest、backup/forward、多 voice、双谱表、tie、tempo、key/time change、tuplet 和 `.mxl`。
 - `ScoreDraft` 包含小节、part、staff、voice、chord、rest、tie、tuplet 和 diagnostics。
 - `RenderScore` 包含 system、measure、staff event、beam、tuplet、glyph boxes 和 element boxes。
 - 播放映射支持当前音符高亮和点击乐谱 seek。
@@ -133,6 +137,16 @@ src/renderer/lib/score/
   createScoreDraft.ts
   index.ts
 
+src/renderer/lib/musicxml/
+  parseMusicXml.ts
+  toScoreDraft.ts
+  toMidi.ts
+  types.ts
+  index.ts
+
+src/renderer/workers/
+  musicXmlParseWorker.ts
+
 src/renderer/lib/staff/
   types.ts
   layout.ts
@@ -156,7 +170,6 @@ src/renderer/features/notation/
 可选后续：
 
 ```text
-src/renderer/lib/score/musicxml.ts
 src/renderer/lib/score/tuplets.ts
 src/renderer/features/keyboard/
 ```
@@ -498,6 +511,28 @@ StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 - 钢琴 MIDI 可显示双谱表。
 - 播放高亮在多谱表仍正确。
 
+### MusicXML 导入（已完成）
+
+目标：
+
+- 支持 `.xml` / `.musicxml` / `.mxl` 输入。
+- 解析后直接生成 MusicXmlScoreSource、ScoreDraft 和播放用 MIDI bytes。
+- 保留导入语义，不再先把 MusicXML 重新量化成通用 MIDI 再反推谱面。
+
+任务：
+
+1. `musicxml/parseMusicXml.ts` 负责解析和诊断。
+2. `musicxml/toScoreDraft.ts` 直接构建谱面模型。
+3. `musicxml/toMidi.ts` 负责播放侧 MIDI bytes。
+4. `musicXmlParseWorker.ts` 保持解析和建模 off-main-thread。
+5. `validate-musicxml-fixtures.mjs` 覆盖核心输入类型。
+
+验收：
+
+- MusicXML 导入后能显示五线谱并保持可播放。
+- 导入诊断可见。
+- 复杂输入不会破坏 MIDI 播放主链路。
+
 ### Phase 6: MusicXML 导出预留（未实现）
 
 目标：
@@ -507,7 +542,7 @@ StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 
 任务：
 
-1. `musicxml.ts` 输出 score-partwise。
+1. 新增 MusicXML exporter 模块输出 `score-partwise`。
 2. 支持 part-list、measure、attributes、note/rest、voice、staff、tie。
 3. 添加开发期导出按钮或调试入口。
 
@@ -608,6 +643,8 @@ MIDI 转谱不存在唯一正确答案。控制范围：
 ```bash
 npm run typecheck
 npm run build
+npm run validate:score-fixtures
+npm run validate:musicxml-fixtures
 ```
 
 ### UI 阶段必跑
@@ -667,7 +704,9 @@ fixtures/triplets.mid
    - 高亮、点击 seek、自动滚动。
 6. `multi-staff`
    - 多轨和钢琴双谱表。
-7. `musicxml-export`
+7. `musicxml-import`
+   - `parseMusicXmlFile()`、`MusicXmlScoreSource`、`toScoreDraft()`、`toMidi()` 和 fixture 校验已完成。
+8. `musicxml-export`
    - 尚未实现，仍是下一阶段任务。
 
 ## 本分支 Definition of Done

@@ -26,6 +26,7 @@ docs/alphasynth-sf2-development-plan.md
 当前已经完成：
 
 - 本地 MIDI 导入。
+- MusicXML / `.mxl` 导入，包含 worker 化解析、独立谱面建模和 fixture 校验。
 - Worker 化 MIDI 解析。
 - Worker 化五线谱生成和布局。
 - alphaSynth + SF2 播放，带 AudioWorklet 优先和 fallback。
@@ -79,6 +80,18 @@ Local MIDI file
       -> buildPlaybackMap()
   -> StaffNotationPanel
   -> playback overlay / click-to-seek
+
+Local MusicXML file
+  -> ArrayBuffer
+  -> musicXmlParseWorker
+  -> MusicXmlScoreSource + ScoreDraft + MIDI bytes
+  -> player.load(raw MIDI bytes)
+  -> scoreRenderWorker
+      -> use MusicXmlScoreSource-derived ScoreDraft
+      -> layoutScore()
+      -> buildPlaybackMap()
+  -> StaffNotationPanel
+  -> playback overlay / click-to-seek
 ```
 
 关键原则：
@@ -86,6 +99,8 @@ Local MIDI file
 - 播放引擎直接加载原始 MIDI bytes，不依赖五线谱转换结果。
 - `ParsedSong.notes` 是播放和谱面生成之间的共享输入模型。
 - `ScoreDraft` 是乐谱语义模型，不包含像素坐标。
+- MusicXML 导入会直接建出 `MusicXmlScoreSource` 和 `ScoreDraft`，播放仍通过 MIDI bytes
+  交给 alphaSynth。
 - `RenderScore` 是布局模型，包含系统、小节、坐标、glyph boxes。
 - `PlaybackMap` 是播放时间与乐谱元素之间的索引。
 - 解析和谱面生成运行在 Worker，避免主线程长任务影响播放。
@@ -110,6 +125,7 @@ src/renderer/
     settings/SettingsPage.tsx
   lib/
     midi.ts
+    musicxml/
     player/
     playbackMap/
     score/
@@ -1035,9 +1051,19 @@ codex/musescore-comparison-fixtures
 
 ### 14.3 MusicXML
 
+当前实现：
+
+- `src/renderer/lib/musicxml/parseMusicXml.ts` 支持 `.xml` / `.musicxml` / `.mxl` 导入。
+- 解析阶段保留 source voice/staff、note type/dots、tuplet/time-modification、tie 语义和
+  measure attributes。
+- 谱面路径通过 `toScoreDraft.ts` 直建 `ScoreDraft`，而播放路径仍通过 `toMidi.ts`
+  生成 MIDI bytes。
+- `scripts/validate-musicxml-fixtures.mjs` 覆盖单声部、和弦、rest、backup/forward、多
+  voice、双谱表、tie、tempo、key/time change、tuplets 和 `.mxl`。
+
 下一步：
 
-- 从 ScoreDraft 导出 score-partwise。
+- 从 `ScoreDraft` 导出 `score-partwise`。
 - 支持 part-list、measure attributes、note/rest、voice、staff。
 - 支持 tie、backup/forward、tuplet、beam。
 - 使用 fixture validator 校验每小节每 voice duration sum。
@@ -1222,7 +1248,20 @@ alphaSynth 链路按错误类型区分：
 
 ## 20. MusicXML 与导出接入设计
 
-MusicXML 应从 `ScoreDraft` 导出，而不是从 `RenderScore` 或 React SVG 反推。
+MusicXML 导入和导出应分开设计。
+
+当前导入路径已经落地：
+
+```text
+MusicXML / .mxl
+  -> parseMusicXmlFile()
+  -> MusicXmlScoreSource
+  -> toScoreDraft()
+  -> RenderScore / PlaybackMap
+  -> buildMidiBytes()
+```
+
+导出路径仍应从 `ScoreDraft` 生成，而不是从 `RenderScore` 或 React SVG 反推。
 
 建议模块：
 
@@ -1275,6 +1314,15 @@ MusicXML score-partwise string
 - tie 要同时输出 playback/semantic 层面的 `<tie>` 和 notation 层面的 `<tied>`。
 - tuplet rest 必须和 tuplet chord 一样写 `time-modification`。
 - 导出前必须校验每个 part/staff/voice 在每个 measure 内 duration 总和合法。
+
+当前导入实现已经验证：
+
+- 单声部、和弦、rest。
+- `backup` / `forward`。
+- 多 voice、双谱表。
+- tie、tempo、key/time change。
+- `.mxl` 容器解包。
+- 基础 tuplet / time-modification。
 
 SVG/PNG/PDF 导出应从 `RenderScore` 走：
 

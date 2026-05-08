@@ -12,6 +12,8 @@ English README: [README.en.md](README.en.md)
 ## 当前状态
 
 - 支持本地 `.mid` / `.midi` 文件导入。
+- 支持本地 `.xml` / `.musicxml` / `.mxl` 文件导入，MusicXML 解析与谱面生成已拆到
+  独立 Worker。
 - 使用 `@tonejs/midi` 解析 MIDI，解析过程已搬到 Worker。
 - 支持 alphaSynth + SF2 SoundFont 播放，优先 AudioWorklet，失败后自动降级到
   ScriptProcessor 并记录诊断。
@@ -26,6 +28,13 @@ English README: [README.en.md](README.en.md)
   - duration spelling、休止、tie 和基础 tuplet；
   - voice split window search；
   - 播放时间到乐谱元素的双向映射。
+- MusicXML 导入管线：
+  - 直接保留原始 voice/staff、note type/dots、tuplet/time-modification、tie 语义和
+    measure attributes；
+  - 谱面直建 `ScoreDraft`，播放仍继续输出 MIDI bytes 给 alphaSynth；
+  - `.mxl` 支持通过容器解包导入；
+  - `npm run validate:musicxml-fixtures` 覆盖单声部、和弦、rest、backup/forward、多
+    voice、双谱表、tie、tempo、key/time change 和 `.mxl`。
 - 五线谱渲染：
   - SVG staff system、谱号、小节、音符、休止符、tie、beam、tuplet；
   - time-slice spacing；
@@ -92,6 +101,7 @@ portable 构建产物写入 `release/`，该目录已被 git 忽略。
 | `npm run preview` | 本地预览构建后的 renderer bundle。 |
 | `npm run typecheck` | 检查 renderer 和 Electron TypeScript。 |
 | `npm run validate:score-fixtures` | 校验仓库内的乐谱 JSON fixture。 |
+| `npm run validate:musicxml-fixtures` | 校验仓库内的 MusicXML 导入 fixture。 |
 
 ## 项目结构
 
@@ -171,6 +181,7 @@ public/soundfonts/midiSound-2025-1-14.sf2
 
 - 继续改进 quantization：扩展 tuplet 候选，并用 fixture 对 penalty 做校准。
 - 改进 engraving geometry：更强的 spacing、collision solving 和 glyph metric。
+- 继续补 MusicXML 导入覆盖和谱面保真，再推进 MusicXML 导出。
 - 从 `ScoreDraft` 导出 MusicXML。
 - 增加钢琴键盘可视化。
 - 增加谱面图片/PDF 和离线音频导出。
