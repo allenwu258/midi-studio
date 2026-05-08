@@ -49,6 +49,7 @@ export function StaffNotationPanel({
   onSeek
 }: StaffNotationPanelProps) {
   const activeOverlayRef = useRef<SVGGElement | null>(null);
+  const lastOverlaySignatureRef = useRef("");
   const activeEventIndex = useMemo(
     () => (renderScore ? buildActiveEventIndex(renderScore) : new Map<string, ActiveRenderEvent>()),
     [renderScore]
@@ -62,11 +63,20 @@ export function StaffNotationPanel({
     }
 
     const overlayElement: SVGGElement = overlay;
+    lastOverlaySignatureRef.current = "";
 
     function updateOverlay() {
       const startedAt = performance.now();
       const activePosition = findActiveScorePosition(playbackMap, getPlaybackPosition());
-      const activeEvents = Array.from(activePosition.activeIds, (id) =>
+      const activeIds = Array.from(activePosition.activeIds).sort();
+      const signature = activeIds.join("|");
+
+      if (signature === lastOverlaySignatureRef.current) {
+        return;
+      }
+
+      lastOverlaySignatureRef.current = signature;
+      const activeEvents = activeIds.map((id) =>
         activeEventIndex.get(id)
       ).filter(isActiveRenderEvent);
       const lookupMs = performance.now() - startedAt;

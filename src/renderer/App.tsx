@@ -30,6 +30,12 @@ type PlaybackRuntimeDiagnostics = {
   overlayLookupMs?: number;
   overlayEventCount: number;
 };
+type OverlayMetricsAccumulator = {
+  pendingUpdateCount: number;
+  lookupMs?: number;
+  activeEventCount: number;
+  dirty: boolean;
+};
 type MidiParseResult = {
   song: ParsedSong;
   durationMs: number;
@@ -58,6 +64,7 @@ type ScoreRenderState =
     };
 
 const PLAYBACK_SNAPSHOT_INTERVAL_MS = 125;
+const PLAYBACK_DIAGNOSTICS_FLUSH_MS = 1000;
 const EMPTY_PLAYBACK_MAP: PlaybackMapEntry[] = [];
 const DEFAULT_RUNTIME_DIAGNOSTICS: PlaybackRuntimeDiagnostics = {
   longTaskCount: 0,
@@ -65,6 +72,11 @@ const DEFAULT_RUNTIME_DIAGNOSTICS: PlaybackRuntimeDiagnostics = {
   snapshotCommitCount: 0,
   overlayUpdateCount: 0,
   overlayEventCount: 0
+};
+const DEFAULT_OVERLAY_METRICS: OverlayMetricsAccumulator = {
+  pendingUpdateCount: 0,
+  activeEventCount: 0,
+  dirty: false
 };
 
 export function App() {
@@ -87,6 +99,7 @@ export function App() {
   const settingsSaveQueueRef = useRef<Promise<void>>(Promise.resolve());
   const pendingSettingsSaveCountRef = useRef(0);
   const snapshotStatusRef = useRef<PlayerSnapshot["status"]>(playerRef.current.getSnapshot().status);
+  const overlayMetricsRef = useRef<OverlayMetricsAccumulator>({ ...DEFAULT_OVERLAY_METRICS });
   const [song, setSong] = useState<ParsedSong | null>(null);
   const [snapshot, setSnapshot] = useState<PlayerSnapshot>(() => playerRef.current.getSnapshot());
   const [playerDiagnostics, setPlayerDiagnostics] = useState<PlayerDiagnostics>(() =>
@@ -162,6 +175,27 @@ export function App() {
     observer.observe({ entryTypes: ["longtask"] });
 
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    const intervalId = window.setInterval(() => {
+      const overlayMetrics = overlayMetricsRef.current;
+
+      if (!overlayMetrics.dirty) {
+        return;
+      }
+
+      overlayMetricsRef.current = { ...DEFAULT_OVERLAY_METRICS };
+      setRuntimeDiagnostics((previousDiagnostics) => ({
+        ...previousDiagnostics,
+        overlayUpdateCount:
+          previousDiagnostics.overlayUpdateCount + overlayMetrics.pendingUpdateCount,
+        overlayLookupMs: overlayMetrics.lookupMs,
+        overlayEventCount: overlayMetrics.activeEventCount
+      }));
+    }, PLAYBACK_DIAGNOSTICS_FLUSH_MS);
+
+    return () => window.clearInterval(intervalId);
   }, []);
 
   useEffect(() => {
@@ -299,12 +333,12 @@ export function App() {
   const getPlaybackPosition = useCallback(() => playerRef.current.getSnapshot().positionMs, []);
 
   const recordOverlayMetrics = useCallback((metrics: { lookupMs: number; activeEventCount: number }) => {
-    setRuntimeDiagnostics((previousDiagnostics) => ({
-      ...previousDiagnostics,
-      overlayUpdateCount: previousDiagnostics.overlayUpdateCount + 1,
-      overlayLookupMs: metrics.lookupMs,
-      overlayEventCount: metrics.activeEventCount
-    }));
+    overlayMetricsRef.current = {
+      pendingUpdateCount: overlayMetricsRef.current.pendingUpdateCount + 1,
+      lookupMs: metrics.lookupMs,
+      activeEventCount: metrics.activeEventCount,
+      dirty: true
+    };
   }, []);
 
   async function handleFileChange(event: React.ChangeEvent<HTMLInputElement>) {
@@ -321,6 +355,7 @@ export function App() {
       loadGenerationRef.current = loadGeneration;
       const buffer = await file.arrayBuffer();
       const midiBytes = buffer.slice(0);
+      overlayMetricsRef.current = { ...DEFAULT_OVERLAY_METRICS };
       setRuntimeDiagnostics(DEFAULT_RUNTIME_DIAGNOSTICS);
       const parseResult = await parseMidiInWorker(buffer, file.name, loadGeneration);
       const parsedSong = parseResult.song;
