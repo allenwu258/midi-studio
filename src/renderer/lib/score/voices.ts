@@ -143,9 +143,10 @@ function scoreVoiceStep(
   const continuityCost = voice.averagePitch === null ? 0 : Math.abs(chordAverage - voice.averagePitch) * 0.55;
   const laneCost = voiceLaneCost(chordAverage, voiceIndex, hasAnyActiveVoice(chord, state.voices));
   const activationCost = voice.averagePitch === null ? voiceIndex * 3.5 : 0;
+  const quantizationHintCost = chord.voiceIndex === voiceIndex ? -22 : 42;
 
   return {
-    cost: overlapCost + sameStartLayerCost + tieCost + restCost + continuityCost + laneCost + activationCost,
+    cost: overlapCost + sameStartLayerCost + tieCost + restCost + continuityCost + laneCost + activationCost + quantizationHintCost,
     illegalOverlapTicks: overlapTicks
   };
 }

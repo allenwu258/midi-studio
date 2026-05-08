@@ -120,6 +120,7 @@ export type QuantizedNote = MidiNote & {
   quantizedStartTicks: number;
   quantizedEndTicks: number;
   staffIndex: number;
+  quantizedVoiceIndex?: number;
   tupletId?: string;
   timeModification?: ScoreTimeModification;
 };

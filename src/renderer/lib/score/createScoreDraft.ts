@@ -241,6 +241,7 @@ function createChordEvents(
       const endTicks = Number(endTickText);
       const timeModification = group.find((note) => note.timeModification)?.timeModification;
       const tupletId = group.find((note) => note.tupletId)?.tupletId;
+      const quantizedVoiceIndex = Math.min(...group.map((note) => note.quantizedVoiceIndex ?? 0));
       const duration = durationNameFromTicks(endTicks - startTicks, ppq, timeModification);
       const baseId = `${partId}-chord-${index}-${startTicks}`;
 
@@ -249,7 +250,7 @@ function createChordEvents(
         baseId,
         partId,
         staffIndex,
-        voiceIndex: 0,
+        voiceIndex: quantizedVoiceIndex,
         measureIndex: -1,
         kind: "chord",
         startTicks,

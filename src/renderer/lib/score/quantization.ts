@@ -20,9 +20,25 @@ type QuantCandidate = {
   localPenalty: number;
 };
 
-type QuantState = {
+type MeasureNotePlan = {
+  note: MidiNote;
+  startTicks: number;
+  endTicks: number;
+  voiceIndex: number;
+  tuplet?: ScoreTuplet;
   cost: number;
-  previousIndex: number;
+};
+
+type MeasureVoiceState = {
+  endTicks: number;
+  averagePitch: number | null;
+  lastStartTicks: number;
+};
+
+type MeasureSearchState = {
+  cost: number;
+  voices: MeasureVoiceState[];
+  plans: MeasureNotePlan[];
 };
 
 type MeasureQuantContext = {
@@ -32,6 +48,11 @@ type MeasureQuantContext = {
   tripletGridTicks: number;
   tuplets: ScoreTuplet[];
 };
+
+const MEASURE_VOICE_LIMIT = 2;
+const MAX_MEASURE_SEARCH_STATES = 96;
+const MAX_NOTE_CANDIDATES = 10;
+const MEASURE_SEARCH_NOTE_LIMIT = 36;
 
 export type QuantizeNotesResult = {
   notes: QuantizedNote[];
@@ -52,97 +73,279 @@ export function quantizeNotesWithContext({
   );
   reportTripletDiagnostics(contexts, diagnostics, trackIndex);
   const sortedNotes = [...notes].sort((a, b) => a.startTicks - b.startTicks || a.midi - b.midi);
-  const startTicksByNoteId = quantizeStarts(sortedNotes, contexts, ppq, regularGridTicks);
+  const measurePlans = createMeasureQuantPlans(sortedNotes, contexts, ppq, regularGridTicks, diagnostics, trackIndex);
 
   return {
     notes: sortedNotes.map((note) => {
-    const context = findContextForTicks(contexts, note.startTicks);
-    const quantizedStartTicks = startTicksByNoteId.get(note.id) ?? quantizeTicks(note.startTicks, regularGridTicks);
-    let quantizedEndTicks = quantizeEndTicks(note, quantizedStartTicks, context, regularGridTicks);
-    const tuplet = findTupletForRange(contexts, quantizedStartTicks, quantizedEndTicks);
+      const context = findContextForTicks(contexts, note.startTicks);
+      const plan = measurePlans.get(note.id);
+      const quantizedStartTicks = plan?.startTicks ?? quantizeTicks(note.startTicks, regularGridTicks);
+      let quantizedEndTicks = plan?.endTicks ?? quantizeEndTicks(note, quantizedStartTicks, context, regularGridTicks);
+      const tuplet = plan?.tuplet ?? findTupletForRange(contexts, quantizedStartTicks, quantizedEndTicks);
 
-    if (quantizedEndTicks <= quantizedStartTicks) {
-      quantizedEndTicks = quantizedStartTicks + Math.max(1, Math.min(regularGridTicks, context.tripletGridTicks));
-    }
+      if (quantizedEndTicks <= quantizedStartTicks) {
+        quantizedEndTicks = quantizedStartTicks + Math.max(1, Math.min(regularGridTicks, context.tripletGridTicks));
+      }
 
-    return {
-      ...note,
-      quantizedStartTicks,
-      quantizedEndTicks,
-      staffIndex: 0,
-      tupletId: tuplet?.id,
-      timeModification: tuplet
-        ? {
-            actualNotes: tuplet.actualNotes,
-            normalNotes: tuplet.normalNotes
-          }
-        : undefined
-    };
-  }),
+      return {
+        ...note,
+        quantizedStartTicks,
+        quantizedEndTicks,
+        staffIndex: 0,
+        quantizedVoiceIndex: plan?.voiceIndex,
+        tupletId: tuplet?.id,
+        timeModification: tuplet
+          ? {
+              actualNotes: tuplet.actualNotes,
+              normalNotes: tuplet.normalNotes
+            }
+          : undefined
+      };
+    }),
     tuplets: contexts.flatMap((context) => context.tuplets)
   };
 }
 
-function quantizeStarts(
+function createMeasureQuantPlans(
   notes: MidiNote[],
   contexts: MeasureQuantContext[],
   ppq: number,
-  regularGridTicks: number
-): Map<string, number> {
-  const candidateSets = notes.map((note) => {
-    const context = findContextForTicks(contexts, note.startTicks);
-    return startCandidates(note.startTicks, context, ppq, regularGridTicks);
-  });
-  const states: QuantState[][] = [];
+  regularGridTicks: number,
+  diagnostics: ScoreDiagnostic[],
+  trackIndex: number
+): Map<string, MeasureNotePlan> {
+  const result = new Map<string, MeasureNotePlan>();
 
-  for (let noteIndex = 0; noteIndex < notes.length; noteIndex += 1) {
-    states[noteIndex] = [];
+  for (const context of contexts) {
+    const measureNotes = notes.filter(
+      (note) => note.startTicks >= context.measure.startTicks && note.startTicks < context.measure.endTicks
+    );
+    const useGreedyFallback = measureNotes.length > MEASURE_SEARCH_NOTE_LIMIT;
+    const plans = useGreedyFallback
+      ? greedyMeasurePlans(measureNotes, context, ppq, regularGridTicks)
+      : searchMeasurePlans(measureNotes, context, ppq, regularGridTicks);
 
-    for (let candidateIndex = 0; candidateIndex < candidateSets[noteIndex].length; candidateIndex += 1) {
-      const candidate = candidateSets[noteIndex][candidateIndex];
+    for (const plan of plans) {
+      result.set(plan.note.id, plan);
+    }
 
-      if (noteIndex === 0) {
-        states[noteIndex][candidateIndex] = {
-          cost: candidate.localPenalty,
-          previousIndex: -1
-        };
-        continue;
-      }
-
-      let bestCost = Number.POSITIVE_INFINITY;
-      let bestPreviousIndex = 0;
-
-      for (let previousIndex = 0; previousIndex < candidateSets[noteIndex - 1].length; previousIndex += 1) {
-        const previous = candidateSets[noteIndex - 1][previousIndex];
-        if (candidate.ticks < previous.ticks) {
-          continue;
-        }
-
-        const transition = transitionPenalty(previous, candidate, notes[noteIndex - 1], notes[noteIndex]);
-        const cost = states[noteIndex - 1][previousIndex].cost + candidate.localPenalty + transition;
-        if (cost < bestCost) {
-          bestCost = cost;
-          bestPreviousIndex = previousIndex;
-        }
-      }
-
-      states[noteIndex][candidateIndex] = {
-        cost: bestCost,
-        previousIndex: bestPreviousIndex
-      };
+    if (useGreedyFallback) {
+      diagnostics.push({
+        severity: "info",
+        code: "QUANTIZATION_WINDOW_FALLBACK",
+        message: "小节音符密度较高，Quantization 2.0 已切换为贪心候选选择以保持导入速度。",
+        trackIndex,
+        tick: context.measure.startTicks
+      });
     }
   }
 
-  const result = new Map<string, number>();
-  let bestIndex = indexOfLowestCost(states[states.length - 1]);
+  return result;
+}
 
-  for (let noteIndex = notes.length - 1; noteIndex >= 0; noteIndex -= 1) {
-    const candidate = candidateSets[noteIndex][bestIndex];
-    result.set(notes[noteIndex].id, candidate.ticks);
-    bestIndex = states[noteIndex][bestIndex].previousIndex;
+function searchMeasurePlans(
+  notes: MidiNote[],
+  context: MeasureQuantContext,
+  ppq: number,
+  regularGridTicks: number
+): MeasureNotePlan[] {
+  if (!notes.length) {
+    return [];
   }
 
-  return result;
+  const sortedNotes = [...notes].sort((a, b) => a.startTicks - b.startTicks || b.endTicks - a.endTicks || b.midi - a.midi);
+  let states: MeasureSearchState[] = [
+    {
+      cost: 0,
+      voices: Array.from({ length: MEASURE_VOICE_LIMIT }, () => ({
+        endTicks: context.measure.startTicks,
+        averagePitch: null,
+        lastStartTicks: context.measure.startTicks
+      })),
+      plans: []
+    }
+  ];
+
+  for (const note of sortedNotes) {
+    const candidates = createMeasureNoteCandidates(note, context, ppq, regularGridTicks);
+    const nextStates: MeasureSearchState[] = [];
+
+    for (const state of states) {
+      for (const candidate of candidates) {
+        const stepCost = scoreMeasurePlan(candidate, state, context, ppq);
+        const voices = state.voices.map((voice) => ({ ...voice }));
+        voices[candidate.voiceIndex] = advanceMeasureVoice(voices[candidate.voiceIndex], candidate);
+        nextStates.push({
+          cost: state.cost + candidate.cost + stepCost,
+          voices,
+          plans: [...state.plans, candidate]
+        });
+      }
+    }
+
+    states = pruneMeasureSearchStates(nextStates);
+  }
+
+  return states.sort((a, b) => a.cost - b.cost)[0]?.plans ?? [];
+}
+
+function greedyMeasurePlans(
+  notes: MidiNote[],
+  context: MeasureQuantContext,
+  ppq: number,
+  regularGridTicks: number
+): MeasureNotePlan[] {
+  const plans: MeasureNotePlan[] = [];
+  const state: MeasureSearchState = {
+    cost: 0,
+    voices: Array.from({ length: MEASURE_VOICE_LIMIT }, () => ({
+      endTicks: context.measure.startTicks,
+      averagePitch: null,
+      lastStartTicks: context.measure.startTicks
+    })),
+    plans
+  };
+  const sortedNotes = [...notes].sort((a, b) => a.startTicks - b.startTicks || b.endTicks - a.endTicks || b.midi - a.midi);
+
+  for (const note of sortedNotes) {
+    const best = createMeasureNoteCandidates(note, context, ppq, regularGridTicks)
+      .map((candidate) => ({
+        candidate,
+        cost: candidate.cost + scoreMeasurePlan(candidate, state, context, ppq)
+      }))
+      .sort((a, b) => a.cost - b.cost || a.candidate.voiceIndex - b.candidate.voiceIndex)[0]?.candidate;
+
+    if (!best) {
+      continue;
+    }
+
+    plans.push(best);
+    state.voices[best.voiceIndex] = advanceMeasureVoice(state.voices[best.voiceIndex], best);
+  }
+
+  return plans;
+}
+
+function createMeasureNoteCandidates(
+  note: MidiNote,
+  context: MeasureQuantContext,
+  ppq: number,
+  regularGridTicks: number
+): MeasureNotePlan[] {
+  const candidates: MeasureNotePlan[] = [];
+  const startOptions = startCandidates(note.startTicks, context, ppq, regularGridTicks);
+
+  for (const start of startOptions) {
+    const endOptions = endCandidates(note, start.ticks, context, regularGridTicks)
+      .sort((a, b) => a.penalty - b.penalty || a.ticks - b.ticks)
+      .slice(0, 4);
+
+    for (const end of endOptions) {
+      const endTicks = Math.max(end.ticks, start.ticks + 1);
+      const tuplet = findTupletForRange([context], start.ticks, endTicks);
+      const duration = durationNameFromTicks(endTicks - start.ticks, ppq, tuplet
+        ? {
+            actualNotes: tuplet.actualNotes,
+            normalNotes: tuplet.normalNotes
+          }
+        : undefined);
+      const durationCost = duration.dots * 4 + (duration.name === "32nd" ? 6 : 0);
+      const tieCost = readableBoundaryCount(start.ticks, endTicks, context) * 7;
+      const tupletCost = tuplet ? -8 : start.grid === "triplet" ? 14 : 0;
+
+      for (let voiceIndex = 0; voiceIndex < MEASURE_VOICE_LIMIT; voiceIndex += 1) {
+        candidates.push({
+          note,
+          startTicks: start.ticks,
+          endTicks,
+          voiceIndex,
+          tuplet,
+          cost: start.localPenalty + end.penalty + durationCost + tieCost + tupletCost + voiceIndex * 1.2
+        });
+      }
+    }
+  }
+
+  return candidates
+    .sort((a, b) => a.cost - b.cost || a.startTicks - b.startTicks || a.endTicks - b.endTicks || a.voiceIndex - b.voiceIndex)
+    .slice(0, MAX_NOTE_CANDIDATES);
+}
+
+function scoreMeasurePlan(
+  candidate: MeasureNotePlan,
+  state: MeasureSearchState,
+  context: MeasureQuantContext,
+  ppq: number
+): number {
+  const voice = state.voices[candidate.voiceIndex];
+  const overlapTicks = Math.max(0, voice.endTicks - candidate.startTicks);
+  const overlapCost = overlapTicks > 0 ? 80_000 + overlapTicks * 0.9 : 0;
+  const restCost = voice.averagePitch === null || overlapTicks > 0
+    ? 0
+    : Math.min(18, (candidate.startTicks - voice.endTicks) / Math.max(1, ppq / 2));
+  const continuityCost = voice.averagePitch === null ? 0 : Math.abs(candidate.note.midi - voice.averagePitch) * 0.42;
+  const sameStartCost = sameStartVoiceCost(candidate, state.plans);
+  const laneCost = candidate.voiceIndex === 0
+    ? Math.max(0, 58 - candidate.note.midi) * 0.35
+    : Math.max(0, candidate.note.midi - 62) * 0.35;
+  const measureEndBonus = candidate.endTicks === context.measure.endTicks ? -3 : 0;
+
+  return overlapCost + restCost + continuityCost + sameStartCost + laneCost + measureEndBonus;
+}
+
+function sameStartVoiceCost(candidate: MeasureNotePlan, previousPlans: MeasureNotePlan[]): number {
+  let cost = 0;
+
+  for (const previous of previousPlans) {
+    if (previous.startTicks !== candidate.startTicks || previous.endTicks === candidate.endTicks) {
+      continue;
+    }
+
+    if (previous.voiceIndex === candidate.voiceIndex) {
+      cost += 140;
+      continue;
+    }
+
+    const candidateUpper = candidate.note.midi > previous.note.midi;
+    const candidateShorter = candidate.endTicks - candidate.startTicks < previous.endTicks - previous.startTicks;
+    const preferredVoiceIndex = candidateUpper || candidateShorter ? 0 : 1;
+    cost += candidate.voiceIndex === preferredVoiceIndex ? -24 : 28;
+  }
+
+  return cost;
+}
+
+function advanceMeasureVoice(voice: MeasureVoiceState, candidate: MeasureNotePlan): MeasureVoiceState {
+  return {
+    endTicks: Math.max(voice.endTicks, candidate.endTicks),
+    averagePitch: candidate.note.midi,
+    lastStartTicks: candidate.startTicks
+  };
+}
+
+function pruneMeasureSearchStates(states: MeasureSearchState[]): MeasureSearchState[] {
+  const bestBySignature = new Map<string, MeasureSearchState>();
+
+  for (const state of states) {
+    const signature = state.voices
+      .map((voice) => `${voice.endTicks}:${voice.lastStartTicks}:${Math.round(voice.averagePitch ?? -1)}`)
+      .join("|");
+    const existing = bestBySignature.get(signature);
+    if (!existing || state.cost < existing.cost) {
+      bestBySignature.set(signature, state);
+    }
+  }
+
+  return [...bestBySignature.values()]
+    .sort((a, b) => a.cost - b.cost)
+    .slice(0, MAX_MEASURE_SEARCH_STATES);
+}
+
+function readableBoundaryCount(startTicks: number, endTicks: number, context: MeasureQuantContext): number {
+  const meter = createMeterStructure(context.measure, context.ppq);
+  return meter.boundaries.filter(
+    (boundary) => boundary.ticks > startTicks && boundary.ticks < endTicks && boundary.role !== "subbeat"
+  ).length;
 }
 
 function startCandidates(
@@ -436,19 +639,6 @@ function isTupletSlotStart(startTicks: number, tuplet: ScoreTuplet): boolean {
   return slot >= 0 && slot < tuplet.actualNotes && tuplet.slots.includes(slot);
 }
 
-function transitionPenalty(
-  previous: QuantCandidate,
-  current: QuantCandidate,
-  previousNote: MidiNote,
-  currentNote: MidiNote
-): number {
-  const sameOriginalOnset = Math.abs(previousNote.startTicks - currentNote.startTicks) <= 8;
-  const sameQuantizedOnset = previous.ticks === current.ticks;
-  const mergePenalty = sameOriginalOnset === sameQuantizedOnset ? 0 : 12;
-  const gridSwitchPenalty = previous.grid === current.grid ? 0 : 3;
-  return mergePenalty + gridSwitchPenalty;
-}
-
 function metricalLevelForTicks(ticks: number, measure: ScoreMeasure, ppq: number): number {
   const localTicks = ticks - measure.startTicks;
   if (localTicks === 0) {
@@ -469,20 +659,6 @@ function distanceToGrid(ticks: number, originTicks: number, gridTicks: number): 
   return Math.abs(local - rounded);
 }
 
-function isCloserToGrid(ticks: number, originTicks: number, candidateGridTicks: number, regularGridTicks: number): boolean {
-  return distanceToGrid(ticks, originTicks, candidateGridTicks) < distanceToGrid(ticks, originTicks, regularGridTicks);
-}
-
 function clampToMeasure(ticks: number, measure: ScoreMeasure): number {
   return Math.max(measure.startTicks, Math.min(measure.endTicks - 1, ticks));
-}
-
-function indexOfLowestCost(states: QuantState[]): number {
-  let result = 0;
-  for (let index = 1; index < states.length; index += 1) {
-    if (states[index].cost < states[result].cost) {
-      result = index;
-    }
-  }
-  return result;
 }
