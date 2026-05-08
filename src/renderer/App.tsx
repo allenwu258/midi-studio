@@ -15,6 +15,7 @@ import type { ScoreDraft } from "./lib/score";
 import type { RenderScore } from "./lib/staff";
 import { formatTime } from "./lib/time";
 import type { MidiParseRequest, MidiParseResponse } from "./workers/midiParseMessages";
+import type { MusicXmlParseRequest, MusicXmlParseResponse } from "./workers/musicXmlParseMessages";
 import type { ScoreRenderRequest, ScoreRenderResponse } from "./workers/scoreRenderMessages";
 
 type AppView = "player" | "settings";
@@ -23,6 +24,8 @@ type PlaybackRuntimeDiagnostics = {
   longestLongTaskMs: number;
   midiParseWorkerMs?: number;
   midiParseError?: string;
+  musicXmlParseWorkerMs?: number;
+  musicXmlParseError?: string;
   scoreRenderWorkerMs?: number;
   scoreRenderError?: string;
   snapshotCommitCount: number;
@@ -38,6 +41,11 @@ type OverlayMetricsAccumulator = {
 };
 type MidiParseResult = {
   song: ParsedSong;
+  durationMs: number;
+};
+type MusicXmlParseResult = {
+  song: ParsedSong;
+  midiBytes: ArrayBuffer;
   durationMs: number;
 };
 type ScoreRenderState =
@@ -349,16 +357,30 @@ export function App() {
 
     const loadGeneration = loadGenerationRef.current + 1;
     let loadingPlayer = playerRef.current;
+    const isMusicXml = isMusicXmlFile(file.name);
+    const isMidi = isMidiFile(file.name);
 
     try {
       setError("");
       loadGenerationRef.current = loadGeneration;
       const buffer = await file.arrayBuffer();
-      const midiBytes = buffer.slice(0);
+      const sourceMidiBytes = isMidi ? buffer.slice(0) : null;
       overlayMetricsRef.current = { ...DEFAULT_OVERLAY_METRICS };
       setRuntimeDiagnostics(DEFAULT_RUNTIME_DIAGNOSTICS);
-      const parseResult = await parseMidiInWorker(buffer, file.name, loadGeneration);
+
+      if (!isMusicXml && !isMidi) {
+        throw new Error("请选择 MIDI 或 MusicXML 文件。");
+      }
+
+      const parseResult = isMusicXml
+        ? await parseMusicXmlInWorker(buffer, file.name, loadGeneration)
+        : await parseMidiInWorker(buffer, file.name, loadGeneration);
       const parsedSong = parseResult.song;
+      const midiBytes = isMusicXml ? (parseResult as MusicXmlParseResult).midiBytes : sourceMidiBytes;
+
+      if (!midiBytes) {
+        throw new Error("文件导入未生成可播放的 MIDI 数据。");
+      }
 
       if (loadGenerationRef.current !== loadGeneration) {
         return;
@@ -366,8 +388,10 @@ export function App() {
 
       setRuntimeDiagnostics((previousDiagnostics) => ({
         ...previousDiagnostics,
-        midiParseWorkerMs: parseResult.durationMs,
-        midiParseError: undefined
+        midiParseWorkerMs: isMidi ? parseResult.durationMs : previousDiagnostics.midiParseWorkerMs,
+        midiParseError: isMidi ? undefined : previousDiagnostics.midiParseError,
+        musicXmlParseWorkerMs: isMusicXml ? parseResult.durationMs : previousDiagnostics.musicXmlParseWorkerMs,
+        musicXmlParseError: isMusicXml ? undefined : previousDiagnostics.musicXmlParseError
       }));
 
       const loadInput = {
@@ -390,8 +414,18 @@ export function App() {
 
       setRuntimeDiagnostics((previousDiagnostics) => ({
         ...previousDiagnostics,
-        midiParseWorkerMs: getTimedWorkerErrorDuration(err) ?? previousDiagnostics.midiParseWorkerMs,
-        midiParseError: err instanceof Error ? err.message : "MIDI 解析失败。"
+        midiParseWorkerMs: isMidi
+          ? getTimedWorkerErrorDuration(err) ?? previousDiagnostics.midiParseWorkerMs
+          : previousDiagnostics.midiParseWorkerMs,
+        midiParseError: isMidi ? (err instanceof Error ? err.message : "MIDI 解析失败。") : previousDiagnostics.midiParseError,
+        musicXmlParseWorkerMs: isMusicXml
+          ? getTimedWorkerErrorDuration(err) ?? previousDiagnostics.musicXmlParseWorkerMs
+          : previousDiagnostics.musicXmlParseWorkerMs,
+        musicXmlParseError: isMusicXml
+          ? err instanceof Error
+            ? err.message
+            : "MusicXML 解析失败。"
+          : previousDiagnostics.musicXmlParseError
       }));
       setSong(null);
       currentLoadInputRef.current = null;
@@ -592,7 +626,7 @@ export function App() {
       <header className="top-bar">
         <div>
           <p className="eyebrow">midi-studio</p>
-          <h1>MIDI 五线谱播放器</h1>
+          <h1>MIDI / MusicXML 五线谱播放器</h1>
         </div>
         <div className="top-actions">
           <button
@@ -603,13 +637,13 @@ export function App() {
             {view === "settings" ? "播放器" : "设置"}
           </button>
           <button className="button secondary" type="button" onClick={() => fileInputRef.current?.click()}>
-            打开 MIDI
+            打开文件
           </button>
           <input
             ref={fileInputRef}
             className="file-input"
             type="file"
-            accept=".mid,.midi,audio/midi"
+            accept=".mid,.midi,.xml,.musicxml,.mxl,audio/midi"
             onChange={handleFileChange}
           />
         </div>
@@ -771,7 +805,7 @@ function PlaybackDiagnosticsPanel({
         </div>
         <div>
           <dt>解析</dt>
-          <dd>{formatDuration(runtimeDiagnostics.midiParseWorkerMs)}</dd>
+          <dd>{formatDuration(runtimeDiagnostics.midiParseWorkerMs ?? runtimeDiagnostics.musicXmlParseWorkerMs)}</dd>
         </div>
         <div>
           <dt>谱面</dt>
@@ -799,6 +833,7 @@ function PlaybackDiagnosticsPanel({
           <dd>
             {playerDiagnostics.lastErrorType ??
               runtimeDiagnostics.midiParseError ??
+              runtimeDiagnostics.musicXmlParseError ??
               runtimeDiagnostics.scoreRenderError ??
               "-"}
           </dd>
@@ -809,6 +844,9 @@ function PlaybackDiagnosticsPanel({
       ) : null}
       {runtimeDiagnostics.midiParseError ? (
         <p>{runtimeDiagnostics.midiParseError}</p>
+      ) : null}
+      {runtimeDiagnostics.musicXmlParseError ? (
+        <p>{runtimeDiagnostics.musicXmlParseError}</p>
       ) : null}
       {runtimeDiagnostics.scoreRenderError ? (
         <p>{runtimeDiagnostics.scoreRenderError}</p>
@@ -945,6 +983,57 @@ function parseMidiInWorker(
     const request: MidiParseRequest = { requestId, buffer, fileName };
     worker.postMessage(request, [buffer]);
   });
+}
+
+function parseMusicXmlInWorker(
+  buffer: ArrayBuffer,
+  fileName: string,
+  requestId: number
+): Promise<MusicXmlParseResult> {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL("./workers/musicXmlParseWorker.ts", import.meta.url), {
+      type: "module"
+    });
+
+    function cleanup() {
+      worker.onmessage = null;
+      worker.onerror = null;
+      worker.terminate();
+    }
+
+    worker.onmessage = (event: MessageEvent<MusicXmlParseResponse>) => {
+      if (event.data.requestId !== requestId) {
+        return;
+      }
+
+      cleanup();
+      if (event.data.status === "success") {
+        resolve({
+          song: event.data.song,
+          midiBytes: event.data.midiBytes,
+          durationMs: event.data.durationMs
+        });
+      } else {
+        reject(createTimedWorkerError(event.data.message, event.data.durationMs));
+      }
+    };
+
+    worker.onerror = (event) => {
+      cleanup();
+      reject(new Error(event.message || "MusicXML 解析线程失败。"));
+    };
+
+    const request: MusicXmlParseRequest = { requestId, buffer, fileName };
+    worker.postMessage(request, [buffer]);
+  });
+}
+
+function isMidiFile(fileName: string): boolean {
+  return /\.(mid|midi)$/i.test(fileName);
+}
+
+function isMusicXmlFile(fileName: string): boolean {
+  return /\.(xml|musicxml|mxl)$/i.test(fileName);
 }
 
 function createTimedWorkerError(message: string, durationMs: number): Error {

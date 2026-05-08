@@ -38,8 +38,8 @@ export function spellChordIntoMeasure(
       endMs: chord.startMs + msRange * ratioEnd,
       durationName: duration.name,
       dots: duration.dots,
-      tieStop: segment.startTicks > chord.startTicks,
-      tieStart: segment.endTicks < chord.endTicks
+      tieStop: chord.tieStop || segment.startTicks > chord.startTicks,
+      tieStart: chord.tieStart || segment.endTicks < chord.endTicks
     };
   });
 }

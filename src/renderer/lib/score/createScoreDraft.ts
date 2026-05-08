@@ -272,10 +272,10 @@ function createChordEvents(
             }),
             sourceNoteId: note.id,
             velocity: note.velocity
-          })),
+        })),
         sourceNoteIds: group.map((note) => note.id),
-        tieStart: false,
-        tieStop: false
+        tieStart: group.some((note) => note.tieStart),
+        tieStop: group.some((note) => note.tieStop)
       } satisfies ScoreChord;
     })
     .sort((a, b) => a.startTicks - b.startTicks || a.notes[0].midi - b.notes[0].midi);

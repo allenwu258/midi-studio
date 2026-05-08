@@ -17,6 +17,8 @@ export type MidiNote = {
   program: number;
   instrumentName: string;
   isDrum: boolean;
+  tieStart?: boolean;
+  tieStop?: boolean;
 };
 
 export type ParsedSong = {
