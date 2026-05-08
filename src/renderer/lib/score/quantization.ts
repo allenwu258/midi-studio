@@ -1,6 +1,7 @@
 import type { MidiNote } from "../midi";
 import { durationNameFromTicks, quantizeTicks } from "./durations";
 import { createMeterStructure } from "./meterStructure";
+import { splitRangeForRhythmSpelling } from "./rhythmSpelling";
 import type { QuantizedNote, ScoreDiagnostic, ScoreMeasure, ScoreTuplet } from "./types";
 
 type QuantizeNotesInput = {
@@ -115,6 +116,10 @@ function createMeasureQuantPlans(
   trackIndex: number
 ): Map<string, MeasureNotePlan> {
   const result = new Map<string, MeasureNotePlan>();
+  let fallbackCount = 0;
+  let firstFallbackTick: number | undefined;
+  let overlapCount = 0;
+  let firstOverlapTick: number | undefined;
 
   for (const context of contexts) {
     const measureNotes = notes.filter(
@@ -130,17 +135,56 @@ function createMeasureQuantPlans(
     }
 
     if (useGreedyFallback) {
-      diagnostics.push({
-        severity: "info",
-        code: "QUANTIZATION_WINDOW_FALLBACK",
-        message: "小节音符密度较高，Quantization 2.0 已切换为贪心候选选择以保持导入速度。",
-        trackIndex,
-        tick: context.measure.startTicks
-      });
+      fallbackCount += 1;
+      firstFallbackTick ??= context.measure.startTicks;
+    }
+
+    if (hasPlanVoiceOverlap(plans)) {
+      overlapCount += 1;
+      firstOverlapTick ??= context.measure.startTicks;
     }
   }
 
+  if (fallbackCount > 0) {
+    diagnostics.push({
+      severity: "info",
+      code: "QUANTIZATION_WINDOW_FALLBACK",
+      message: `检测到 ${fallbackCount} 个高密度小节，Quantization 2.0 已切换为贪心候选选择以保持导入速度。`,
+      trackIndex,
+      tick: firstFallbackTick
+    });
+  }
+
+  if (overlapCount > 0) {
+    diagnostics.push({
+      severity: "warning",
+      code: "QUANTIZATION_VOICE_OVERLAP",
+      message: `Quantization 2.0 有 ${overlapCount} 个小节无法找到完全无重叠的候选声部分配，后续声部分离将继续修正。`,
+      trackIndex,
+      tick: firstOverlapTick
+    });
+  }
+
   return result;
+}
+
+function hasPlanVoiceOverlap(plans: MeasureNotePlan[]): boolean {
+  const byVoice = new Map<number, MeasureNotePlan[]>();
+
+  for (const plan of plans) {
+    byVoice.set(plan.voiceIndex, [...(byVoice.get(plan.voiceIndex) ?? []), plan]);
+  }
+
+  for (const voicePlans of byVoice.values()) {
+    const sorted = [...voicePlans].sort((a, b) => a.startTicks - b.startTicks || a.endTicks - b.endTicks);
+    for (let index = 1; index < sorted.length; index += 1) {
+      if (sorted[index].startTicks < sorted[index - 1].endTicks) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function searchMeasurePlans(
@@ -251,6 +295,7 @@ function createMeasureNoteCandidates(
         : undefined);
       const durationCost = duration.dots * 4 + (duration.name === "32nd" ? 6 : 0);
       const tieCost = readableBoundaryCount(start.ticks, endTicks, context) * 7;
+      const spellingCost = rhythmSpellingCost(start.ticks, endTicks, context, ppq, tuplet);
       const tupletCost = tuplet ? -8 : start.grid === "triplet" ? 14 : 0;
 
       for (let voiceIndex = 0; voiceIndex < MEASURE_VOICE_LIMIT; voiceIndex += 1) {
@@ -260,7 +305,7 @@ function createMeasureNoteCandidates(
           endTicks,
           voiceIndex,
           tuplet,
-          cost: start.localPenalty + end.penalty + durationCost + tieCost + tupletCost + voiceIndex * 1.2
+          cost: start.localPenalty + end.penalty + durationCost + tieCost + spellingCost + tupletCost + voiceIndex * 1.2
         });
       }
     }
@@ -282,15 +327,66 @@ function scoreMeasurePlan(
   const overlapCost = overlapTicks > 0 ? 80_000 + overlapTicks * 0.9 : 0;
   const restCost = voice.averagePitch === null || overlapTicks > 0
     ? 0
-    : Math.min(18, (candidate.startTicks - voice.endTicks) / Math.max(1, ppq / 2));
+    : restGapCost(voice.endTicks, candidate.startTicks, context, ppq);
   const continuityCost = voice.averagePitch === null ? 0 : Math.abs(candidate.note.midi - voice.averagePitch) * 0.42;
   const sameStartCost = sameStartVoiceCost(candidate, state.plans);
+  const tupletContinuityCost = tupletSlotContinuityCost(candidate, state.plans);
   const laneCost = candidate.voiceIndex === 0
     ? Math.max(0, 58 - candidate.note.midi) * 0.35
     : Math.max(0, candidate.note.midi - 62) * 0.35;
   const measureEndBonus = candidate.endTicks === context.measure.endTicks ? -3 : 0;
 
-  return overlapCost + restCost + continuityCost + sameStartCost + laneCost + measureEndBonus;
+  return overlapCost + restCost + continuityCost + sameStartCost + tupletContinuityCost + laneCost + measureEndBonus;
+}
+
+function rhythmSpellingCost(
+  startTicks: number,
+  endTicks: number,
+  context: MeasureQuantContext,
+  ppq: number,
+  tuplet?: ScoreTuplet
+): number {
+  const segments = splitRangeForRhythmSpelling(startTicks, endTicks, context.measure, ppq, "chord");
+  const tieSegmentCost = Math.max(0, segments.length - 1) * 18;
+  const tinyFragmentCost = segments.reduce((cost, segment) => {
+    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq, tuplet
+      ? {
+          actualNotes: tuplet.actualNotes,
+          normalNotes: tuplet.normalNotes
+        }
+      : undefined);
+    return cost + (duration.name === "32nd" ? 12 : 0) + duration.dots * 2;
+  }, 0);
+  const offBeatLongNoteCost = !isReadableStart(startTicks, context) && endTicks - startTicks >= ppq
+    ? 12
+    : 0;
+
+  return tieSegmentCost + tinyFragmentCost + offBeatLongNoteCost;
+}
+
+function restGapCost(startTicks: number, endTicks: number, context: MeasureQuantContext, ppq: number): number {
+  if (endTicks <= startTicks) {
+    return 0;
+  }
+
+  const segments = splitRangeForRhythmSpelling(startTicks, endTicks, context.measure, ppq, "rest");
+  const baseCost = Math.min(18, (endTicks - startTicks) / Math.max(1, ppq / 2));
+  const splitCost = Math.max(0, segments.length - 1) * 5;
+  const tinyRestCost = segments.reduce((cost, segment) => {
+    const duration = durationNameFromTicks(segment.endTicks - segment.startTicks, ppq);
+    return cost + (duration.name === "32nd" ? 8 : 0);
+  }, 0);
+
+  return baseCost + splitCost + tinyRestCost;
+}
+
+function isReadableStart(ticks: number, context: MeasureQuantContext): boolean {
+  const meter = createMeterStructure(context.measure, context.ppq);
+  return meter.boundaries.some(
+    (boundary) =>
+      boundary.ticks === ticks &&
+      (boundary.role === "measure" || boundary.role === "strong" || boundary.role === "beat")
+  );
 }
 
 function sameStartVoiceCost(candidate: MeasureNotePlan, previousPlans: MeasureNotePlan[]): number {
@@ -313,6 +409,34 @@ function sameStartVoiceCost(candidate: MeasureNotePlan, previousPlans: MeasureNo
   }
 
   return cost;
+}
+
+function tupletSlotContinuityCost(candidate: MeasureNotePlan, previousPlans: MeasureNotePlan[]): number {
+  const tuplet = candidate.tuplet;
+  if (!tuplet) {
+    return 0;
+  }
+
+  const siblingPlans = previousPlans.filter(
+    (plan) =>
+      plan.voiceIndex === candidate.voiceIndex &&
+      plan.tuplet?.id === tuplet.id
+  );
+  if (!siblingPlans.length) {
+    return 0;
+  }
+
+  const occupiedSlots = new Set(siblingPlans.map((plan) => slotIndexForTuplet(plan.startTicks, tuplet)).filter(isNumber));
+  const slot = slotIndexForTuplet(candidate.startTicks, tuplet);
+  if (slot === null) {
+    return 48;
+  }
+
+  const duplicateSlotCost = occupiedSlots.has(slot) ? 80 : 0;
+  const nearestSlotDistance = Math.min(...[...occupiedSlots].map((item) => Math.abs(item - slot)));
+  const continuityBonus = nearestSlotDistance === 1 ? -10 : nearestSlotDistance === 2 ? -3 : 0;
+
+  return duplicateSlotCost + continuityBonus;
 }
 
 function advanceMeasureVoice(voice: MeasureVoiceState, candidate: MeasureNotePlan): MeasureVoiceState {
@@ -630,13 +754,22 @@ function findTupletForRange(contexts: MeasureQuantContext[], startTicks: number,
 }
 
 function isTupletSlotStart(startTicks: number, tuplet: ScoreTuplet): boolean {
+  const slot = slotIndexForTuplet(startTicks, tuplet);
+  return slot !== null && tuplet.slots.includes(slot);
+}
+
+function slotIndexForTuplet(startTicks: number, tuplet: ScoreTuplet): number | null {
   const offset = startTicks - tuplet.startTicks;
   if (offset < 0 || offset % tuplet.slotTicks !== 0) {
-    return false;
+    return null;
   }
 
   const slot = offset / tuplet.slotTicks;
-  return slot >= 0 && slot < tuplet.actualNotes && tuplet.slots.includes(slot);
+  return slot >= 0 && slot < tuplet.actualNotes ? slot : null;
+}
+
+function isNumber(value: number | null): value is number {
+  return value !== null;
 }
 
 function metricalLevelForTicks(ticks: number, measure: ScoreMeasure, ppq: number): number {

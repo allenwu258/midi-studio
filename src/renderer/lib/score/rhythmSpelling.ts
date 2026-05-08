@@ -78,6 +78,16 @@ export function spellRestIntoMeasure(
   });
 }
 
+export function splitRangeForRhythmSpelling(
+  startTicks: number,
+  endTicks: number,
+  measure: ScoreMeasure,
+  ppq: number,
+  kind: "chord" | "rest"
+): RhythmSegment[] {
+  return splitRangeAtReadableBoundaries(startTicks, endTicks, measure, ppq, kind);
+}
+
 function splitRangeAtReadableBoundaries(
   startTicks: number,
   endTicks: number,
