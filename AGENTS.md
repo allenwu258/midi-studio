@@ -5,10 +5,12 @@ Guidance for coding agents working in this repository.
 ## Project
 
 `midi-studio` is a React + Electron + Vite + TypeScript desktop application.
-It currently contains an early local MIDI player prototype with numbered
-notation, pure Web Audio synthesis, alphaSynth + SF2 playback, and persistent
-settings. Staff notation, piano keyboard visualization, and advanced exports
-are not implemented yet.
+It is now centered on local MIDI playback plus a structured staff-notation
+pipeline. The app supports local MIDI import, worker-based MIDI parsing,
+alphaSynth + SF2 playback, pure Web Audio fallback, persistent settings, staff
+notation rendering, playback-to-score mapping, and playback reliability
+diagnostics. Piano keyboard visualization, MusicXML export, and advanced export
+workflows are still planned.
 
 ## Working Directory
 
@@ -38,6 +40,12 @@ Type-check:
 npm run typecheck
 ```
 
+Validate score fixtures:
+
+```bash
+npm run validate:score-fixtures
+```
+
 Build:
 
 ```bash
@@ -54,11 +62,21 @@ The portable artifact is written to `release/`, which is ignored by git.
 
 ## Code Ownership
 
-- `src/main/`: Electron main process and application lifecycle.
+- `src/main/`: Electron main process, application lifecycle, settings IPC, and
+  custom resource protocol.
 - `src/preload/`: Safe bridge between Electron and renderer.
-- `src/renderer/`: React UI and player prototype.
+- `src/renderer/`: React UI, playback UI, staff notation UI, and renderer-side
+  workers.
 - `src/renderer/lib/midi.ts`: MIDI parsing and normalized song model.
-- `src/renderer/lib/notation.ts`: numbered notation and time formatting helpers.
+- `src/renderer/lib/score/`: MIDI-to-ScoreDraft conversion, quantization,
+  rhythm spelling, pitch spelling, piano split, tuplets, and voice separation.
+- `src/renderer/lib/staff/`: RenderScore layout, spacing, beams, glyph metrics,
+  collision handling, and SVG export helpers.
+- `src/renderer/lib/playbackMap/`: score element to playback-time mapping.
+- `src/renderer/features/notation/`: staff notation React UI and playback
+  overlay.
+- `src/renderer/workers/`: MIDI parse worker and score render worker.
+- `src/renderer/lib/time.ts`: time formatting helpers.
 - `src/renderer/lib/synthPlayer.ts`: pure Web Audio playback engine.
 - `src/renderer/lib/player/alphaSynthPlayer.ts`: alphaSynth + SF2 playback
   engine wrapper.
@@ -80,7 +98,8 @@ The portable artifact is written to `release/`, which is ignored by git.
   - Expose only small, typed APIs through preload.
 - Prefer TypeScript types over implicit `any`.
 - Keep feature work isolated from infrastructure changes.
-- Do not commit generated folders such as `node_modules`, `dist`, or `logs`.
+- Do not commit generated folders such as `node_modules`, `dist`, `logs`, or
+  local comparison artifacts.
 - Do not introduce large framework changes without a clear reason.
 - Keep dependencies conservative while the project still targets Node 16.
 - Keep `release/` ignored; portable executables must not be committed.
@@ -95,6 +114,10 @@ The portable artifact is written to `release/`, which is ignored by git.
   the old engine. Disposing the old player first can lose the working fallback.
 - Preserve the settings save queue in `App`; settings writes are serialized so
   rapid slider or mode changes cannot apply older SQLite responses last.
+- Keep MIDI parsing and score rendering off the main thread unless there is a
+  measured reason to change that boundary.
+- Do not reintroduce playback-position-driven React rerenders for staff
+  highlighting; use the existing clock/overlay separation.
 
 ## Frontend Rules
 
@@ -112,6 +135,7 @@ For scaffold or infrastructure changes, run:
 
 ```bash
 npm run typecheck
+npm run validate:score-fixtures
 npm run build
 ```
 
@@ -119,6 +143,7 @@ For packaging configuration changes, run at least:
 
 ```bash
 npm run typecheck
+npm run validate:score-fixtures
 npm run build
 ```
 
@@ -153,18 +178,24 @@ loading behavior.
 
 ## Current Feature Boundary
 
-The prototype supports local MIDI import, numbered notation, pure synthesis,
-alphaSynth + SF2 playback, persistent settings, basic transport controls,
-seeking, speed changes, and master volume. The next major work should be
-planned before implementation, especially around:
+The current feature branch supports local MIDI import, staff notation rendering,
+score playback highlighting, click-to-seek mapping, pure synthesis fallback,
+alphaSynth + SF2 playback, persistent settings, transport controls, seeking,
+speed changes, and master volume. Current active work is improving notation
+quality and reliability, especially around:
 
-- Offline rendering.
-- Score rendering.
-- Timeline synchronization.
+- Quantization, duration spelling, tuplets, and voice separation.
+- Engraving geometry, spacing, and collision avoidance.
+- MusicXML export.
+- Piano keyboard visualization.
+- Offline score/audio export.
 
 ## Notes For Future Agents
 
-- Read `README.md` before changing project structure.
+- Read `README.md` before changing project structure. `README.md` is the
+  Chinese primary README; `README.en.md` is the English version.
+- Read `docs/system-architecture-and-technical-implementation.md` before
+  changing the MIDI import, score rendering, playback, or worker boundaries.
 - Preserve user changes in the working tree.
 - Prefer small patches with clear verification.
 - If a command fails because the dev server is already running, inspect the

@@ -23,6 +23,26 @@ MIDI 文件和本地导出，后续再扩展在线资源导入。
 - 支持导出音频、乐谱图片/PDF、同步映射数据。
 - 在 Electron 桌面端避免浏览器标签页后台节流导致的卡顿和爆音。
 
+## 2.1 当前实现状态
+
+当前功能分支已经完成 M1 的主要播放能力，并完成 M2 的五线谱主链路基础版本：
+
+- 本地 MIDI 导入和 worker 解析。
+- alphaSynth + SF2 播放，带 AudioWorklet 优先和自动 fallback 诊断。
+- 基础 transport、seek、速度、音量和设置持久化。
+- MIDI 到结构化 `ScoreDraft` 的转换。
+- 五线谱 SVG 渲染、播放高亮和点击 seek。
+- score render worker、playback map、overlay 与 React 高频 rerender 解耦。
+- Quantization、duration spelling、tuplet、voice split、piano split 已有基础/迭代实现。
+
+仍未完成：
+
+- 钢琴键盘可视化。
+- MusicXML 导出。
+- PDF/PNG/SVG 导出入口。
+- 离线 WAV/MP3 渲染。
+- A-B 循环、节拍器、移调等完整练习控制。
+
 ## 3. 参考页面观察
 
 ### 3.1 页面技术结构

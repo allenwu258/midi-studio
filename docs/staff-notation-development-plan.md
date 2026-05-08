@@ -1,12 +1,12 @@
 # Staff Notation Pipeline Development Plan
 
-本文档是 `codex/staff-notation-pipeline` 分支的功能开发规划，覆盖：
+本文档是 `codex/staff-notation-pipeline` 分支的功能开发规划和当前实现记录，覆盖：
 
 - MIDI 转五线谱结构化模型。
 - 五线谱渲染。
 - 播放位置到乐谱位置的映射。
 - MusicXML 导出预留。
-- 移除当前内联的暴力简谱 UI。
+- 当前五线谱主链路和后续 MusicXML/export 预留。
 
 详细算法背景见：
 
@@ -16,48 +16,51 @@ docs/midi-to-staff-notation-technical-design.md
 
 ## 当前状态
 
-当前播放器链路：
+当前主链路已经从内联简谱原型迁移到五线谱管线：
 
 ```text
 MIDI file
-  -> parseMidiFile()
-  -> ParsedSong.notes
+  -> midiParseWorker / parseMidiFile()
+  -> ParsedSong.notes + ParsedSong.meta
   -> player load/playback
-  -> ParsedSong.clusters
-  -> App inline NumberedNotation
+  -> scoreRenderWorker
+  -> createScoreDraft()
+  -> layoutScore()
+  -> buildPlaybackMap()
+  -> StaffNotationPanel
 ```
 
-主要文件：
+主要模块：
 
 ```text
 src/renderer/lib/midi.ts
-src/renderer/lib/notation.ts
-src/renderer/App.tsx
-src/renderer/styles.css
+src/renderer/workers/midiParseWorker.ts
+src/renderer/workers/scoreRenderWorker.ts
+src/renderer/lib/score/
+src/renderer/lib/staff/
+src/renderer/lib/playbackMap/
+src/renderer/features/notation/StaffNotationPanel.tsx
 ```
 
-当前简谱耦合点：
+已落地能力：
 
-- `src/renderer/lib/notation.ts`
-  - `midiToNumberedNotation()`
-  - `normalizeKeyName()`
-  - `formatTime()`
-- `src/renderer/lib/midi.ts`
-  - `MidiNote.notation`
-  - `NoteCluster`
-  - `ParsedSong.clusters`
-  - `createNoteClusters()`
-- `src/renderer/App.tsx`
-  - `NumberedNotation`
-  - `NoteToken`
-  - `findClusterPlayback()`
-  - panel label uses `aria-label="简谱"`
-  - title uses `简谱 MIDI 播放器`
-- `src/renderer/styles.css`
-  - `.numbered-score`
-  - `.note-token`
+- 简谱 UI 和旧的内联 numbered notation 主路径已移除。
+- MIDI 解析和五线谱生成已搬到 Worker。
+- `ScoreDraft` 包含小节、part、staff、voice、chord、rest、tie、tuplet 和 diagnostics。
+- `RenderScore` 包含 system、measure、staff event、beam、tuplet、glyph boxes 和 element boxes。
+- 播放映射支持当前音符高亮和点击乐谱 seek。
+- 五线谱静态 SVG 与播放 overlay 分层，播放 clock 不再驱动 React 高频 rerender。
+- Quantization 2.0 第一阶段已落地：小节级 beam search 同时考虑 start、duration、tuplet、tie/readability 和 voice hint。
+- Duration spelling 复用 meter structure，note/rest 使用不同拆分策略。
+- Piano split、voice split、spacing、beam、collision avoidance 均已有基础实现。
 
-目标不是只替换 UI，而是把解析、结构化乐谱、渲染、播放定位拆成清晰模块。
+仍未完成或仍是预留：
+
+- MusicXML 导出。
+- 专业级 SMuFL 字体和完整 engraving solver。
+- 钢琴键盘可视化。
+- 离线 PDF/图片/音频导出。
+- 更完整的 tuplet 类型、human performance import 和 fixture-driven penalty calibration。
 
 ## 目标用户体验
 
@@ -80,7 +83,7 @@ bottom transport
 
 - 小节、拍号、谱号、休止、音符时值基本正确。
 - 播放映射稳定。
-- 比当前简谱更接近真实练习场景。
+- 比早期简谱原型更接近真实练习场景。
 
 ## 总体架构
 
@@ -99,7 +102,7 @@ Raw MIDI bytes
 
 ```text
 src/renderer/lib/midi.ts
-  MIDI 读取、播放用 note 数据、meta 数据。不能再负责简谱显示。
+  MIDI 读取、播放用 note 数据、meta 数据。不能承担谱面 UI 表示职责。
 
 src/renderer/lib/score/
   MIDI 到五线谱结构模型。纯数据、纯算法、可测试。
@@ -114,28 +117,30 @@ src/renderer/lib/playbackMap/
   音频位置 ms 与 ScoreDraft/RenderScore 元素之间的双向映射。
 ```
 
-## 新增目录规划
+## 目录规划与实际落地
 
 ```text
 src/renderer/lib/score/
-  fraction.ts
   types.ts
-  options.ts
-  normalize.ts
   measureMap.ts
-  chords.ts
-  quantize.ts
+  meterStructure.ts
+  quantization.ts
   durations.ts
+  rhythmSpelling.ts
   pitchSpelling.ts
+  pianoSplit.ts
+  voices.ts
   createScoreDraft.ts
-  diagnostics.ts
   index.ts
 
 src/renderer/lib/staff/
   types.ts
   layout.ts
-  glyphs.ts
-  renderGeometry.ts
+  spacing.ts
+  glyphMetrics.ts
+  beams.ts
+  collisions.ts
+  svgExport.ts
   index.ts
 
 src/renderer/lib/playbackMap/
@@ -146,20 +151,14 @@ src/renderer/lib/playbackMap/
 
 src/renderer/features/notation/
   StaffNotationPanel.tsx
-  StaffSystem.tsx
-  StaffMeasure.tsx
-  StaffGlyph.tsx
-  useAutoScrollToPlayback.ts
-  notationStyles.css
 ```
 
 可选后续：
 
 ```text
 src/renderer/lib/score/musicxml.ts
-src/renderer/lib/score/voices.ts
-src/renderer/lib/score/pianoSplit.ts
 src/renderer/lib/score/tuplets.ts
+src/renderer/features/keyboard/
 ```
 
 ## 数据模型
@@ -372,57 +371,23 @@ sourceNoteIds: string[]
 现有 `seekTo(value)` 保持。
 StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 
-## 移除暴力简谱计划
+## 简谱移除状态
 
-### 第一步：并行接入 StaffNotationPanel
+暴力简谱主路径已经移除，当前不再需要保留并行简谱 UI。
 
-保留旧简谱一小段时间，但不再作为主实现。
+已完成：
 
-`App.tsx`：
+- `App.tsx` 主标题和主面板切换为五线谱播放器。
+- `StaffNotationPanel` 成为主乐谱视图。
+- 旧 `NumberedNotation` / `NoteToken` / cluster playback 查找逻辑已移除。
+- `ParsedSong` 不再依赖 `clusters` 或 `MidiNote.notation` 作为显示模型。
+- `formatTime()` 已迁移到 `src/renderer/lib/time.ts`。
 
-- title 改为 `MIDI 五线谱播放器` 或 `MIDI 练习工作台`。
-- `aria-label="五线谱"`。
-- 用 `StaffNotationPanel` 替换 `NumberedNotation`。
-
-### 第二步：删除简谱 UI
-
-删除：
-
-- `NumberedNotation`
-- `NoteToken`
-- `findClusterPlayback`
-- `NoteCluster` 类型
-- `ParsedSong.clusters`
-- `MidiNote.notation`
-- `createNoteClusters`
-- `.numbered-score`
-- `.note-token`
-
-### 第三步：拆分 notation.ts
-
-保留 `formatTime()`，但改名或迁移到：
-
-```text
-src/renderer/lib/time.ts
-```
-
-删除 numbered notation 相关：
-
-- `KEY_TO_PITCH_CLASS`
-- `MAJOR_SCALE`
-- `DEGREE_LABELS`
-- `normalizeKeyName`
-- `midiToNumberedNotation`
-
-调号解析迁移到：
-
-```text
-src/renderer/lib/score/keySignature.ts
-```
+后续如果需要简谱，应作为新的导出/显示模式单独设计，不应重新耦合进 MIDI 解析模型。
 
 ## 开发阶段
 
-### Phase 1: 数据基础与简谱解耦
+### Phase 1: 数据基础与简谱解耦（已完成）
 
 目标：
 
@@ -446,7 +411,7 @@ src/renderer/lib/score/keySignature.ts
 - 打开 MIDI 后仍能播放。
 - 主面板不再出现简谱 token。
 
-### Phase 2: 基础五线谱渲染
+### Phase 2: 基础五线谱渲染（已完成）
 
 目标：
 
@@ -468,7 +433,7 @@ src/renderer/lib/score/keySignature.ts
 - 多小节可换行。
 - resize 后布局不重叠。
 
-### Phase 3: 量化、时值与休止
+### Phase 3: 量化、时值与休止（已完成并进入 2.0 迭代）
 
 目标：
 
@@ -478,7 +443,7 @@ src/renderer/lib/score/keySignature.ts
 
 任务：
 
-1. `quantize.ts` 实现 nearest-grid baseline。
+1. `quantization.ts` 实现 nearest-grid baseline，并已升级为小节级 beam search。
 2. `durations.ts` 实现 whole/half/quarter/eighth/16th 和附点。
 3. 每个 voice 填满 measure duration。
 4. 渲染 rest 占位和 tie。
@@ -489,7 +454,7 @@ src/renderer/lib/score/keySignature.ts
 - 跨小节长音在显示上有 tie。
 - 休止符不再显示为空洞时间。
 
-### Phase 4: 播放映射与交互
+### Phase 4: 播放映射与交互（已完成基础链路）
 
 目标：
 
@@ -502,7 +467,7 @@ src/renderer/lib/score/keySignature.ts
 1. `buildPlaybackMap.ts` 从 ScoreDraft 构建映射。
 2. `lookup.ts` 实现 binary search。
 3. Staff SVG 元素绑定 `data-score-element-id`。
-4. App 将 `snapshot.positionMs` 传给 StaffNotationPanel。
+4. App 暴露 playback clock getter，StaffNotationPanel 使用 overlay 低频读取，避免播放位置驱动 React 高频 rerender。
 5. StaffNotationPanel 将 click 转换为 `onSeek(ms)`。
 6. 实现 auto-scroll，跟随设置中的 follow playback。
 
@@ -512,7 +477,7 @@ src/renderer/lib/score/keySignature.ts
 - 拖动进度条后高亮跳到对应小节。
 - 点击音符后播放器 seek 到该位置。
 
-### Phase 5: 多轨、多谱表与基础钢琴
+### Phase 5: 多轨、多谱表与基础钢琴（基础实现已完成）
 
 目标：
 
@@ -533,7 +498,7 @@ src/renderer/lib/score/keySignature.ts
 - 钢琴 MIDI 可显示双谱表。
 - 播放高亮在多谱表仍正确。
 
-### Phase 6: MusicXML 导出预留
+### Phase 6: MusicXML 导出预留（未实现）
 
 目标：
 
@@ -551,7 +516,7 @@ src/renderer/lib/score/keySignature.ts
 - 导出的 MusicXML 可被 MuseScore 打开。
 - 每小节 duration 正确。
 
-### Phase 7: 高级质量
+### Phase 7: 高级质量（进行中）
 
 目标：
 
@@ -563,9 +528,9 @@ src/renderer/lib/score/keySignature.ts
 任务：
 
 1. Triplet detection。
-2. DP quantization。
-3. Voice separation。
-4. Piano split DP。
+2. 小节级 quantization beam search。
+3. Voice split window search。
+4. Piano split DP baseline。
 5. Import options UI。
 
 验收：
@@ -628,11 +593,13 @@ MIDI 转谱不存在唯一正确答案。控制范围：
 
 ### 迁移风险
 
-当前简谱逻辑在 `midi.ts` 和 `App.tsx` 内联。控制范围：
+简谱到五线谱的 UI 迁移已经完成。后续迁移风险主要来自算法质量提升时误伤播放链路。
+控制范围：
 
-- 先引入 StaffNotationPanel，再删旧简谱。
-- 播放引擎继续只依赖 `ParsedSong.notes`。
+- 播放引擎继续只依赖 `ParsedSong.notes` 和原始 MIDI bytes。
+- MIDI 解析和五线谱生成继续在 Worker 中运行。
 - 不让五线谱转换失败影响音频播放。
+- 播放高亮继续走 playback map 和 overlay，不重新绑定到 React 高频 state。
 
 ## 测试计划
 
@@ -684,9 +651,9 @@ fixtures/triplets.mid
 - 每个 PlaybackMap entry 可反查 element box。
 - 无新增大依赖，除非专门评估 Node 16 和打包体积。
 
-## 初始实施顺序
+## 已完成实施顺序
 
-建议这个分支接下来按以下 PR/commit 粒度推进：
+这个分支已经按以下粒度完成基础链路：
 
 1. `score-core`
    - Fraction、ScoreDraft types、ParsedSong meta/tick 扩展。
@@ -701,11 +668,11 @@ fixtures/triplets.mid
 6. `multi-staff`
    - 多轨和钢琴双谱表。
 7. `musicxml-export`
-   - 基础 MusicXML 导出。
+   - 尚未实现，仍是下一阶段任务。
 
 ## 本分支 Definition of Done
 
-本分支完成时应满足：
+本分支基础链路已满足：
 
 - 原暴力简谱 UI 和解析字段已移除。
 - 打开 MIDI 后显示五线谱工作区。
@@ -715,4 +682,11 @@ fixtures/triplets.mid
 - 拖动进度条后高亮同步。
 - 播放、停止、速度、音量、播放引擎切换仍可用。
 - `npm run typecheck` 通过。
+- `npm run validate:score-fixtures` 通过。
 - `npm run build` 通过。
+
+剩余 DoD：
+
+- MusicXML 导出。
+- 更完整的 tuplet/human performance import。
+- 更接近 MuseScore 的 engraving geometry。

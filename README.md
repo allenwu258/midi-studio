@@ -1,217 +1,181 @@
 # midi-studio
 
-midi-studio is an open-source desktop MIDI practice studio built with React,
-Electron, Vite, and TypeScript.
+midi-studio 是一个本地优先的开源 MIDI 练习桌面应用，基于 React、Electron、
+Vite 和 TypeScript 构建。
 
-The current version is an early playable prototype. It can open local MIDI
-files, parse note events, play them through either a lightweight Web Audio
-synthesizer or a bundled alphaSynth + SF2 engine, show numbered notation, and
-highlight playback progress. Full staff notation, piano keyboard visualization,
-and advanced export workflows are planned but not part of this version yet.
+当前版本已经从早期简谱原型演进为五线谱主链路：可以打开本地 MIDI，在 Worker
+中解析和生成结构化乐谱，通过 alphaSynth + SF2 或 Web Audio fallback 播放，并在
+五线谱上同步高亮播放位置。
 
-## Goals
+English README: [README.en.md](README.en.md)
 
-- Provide a local-first desktop MIDI player and practice workspace.
-- Render notation and piano-roll style playback in sync with audio.
-- Support higher quality audio paths such as soundfont-backed playback and
-  offline rendered audio.
-- Keep the UI simple, fast, and useful for repeated practice sessions.
+## 当前状态
 
-## Current Status
+- 支持本地 `.mid` / `.midi` 文件导入。
+- 使用 `@tonejs/midi` 解析 MIDI，解析过程已搬到 Worker。
+- 支持 alphaSynth + SF2 SoundFont 播放，优先 AudioWorklet，失败后自动降级到
+  ScriptProcessor 并记录诊断。
+- 保留纯 Web Audio 合成器作为备用播放模式。
+- 支持播放、暂停、停止、seek、调速和主音量。
+- 设置通过 SQLite 持久化。
+- MIDI 转五线谱管线：
+  - 小节图和拍号边界对齐；
+  - 带调号意识的音高拼写；
+  - 钢琴双谱表拆分；
+  - 小节级 quantization beam search；
+  - duration spelling、休止、tie 和基础 tuplet；
+  - voice split window search；
+  - 播放时间到乐谱元素的双向映射。
+- 五线谱渲染：
+  - SVG staff system、谱号、小节、音符、休止符、tie、beam、tuplet；
+  - time-slice spacing；
+  - glyph boxes 和基础 collision avoidance；
+  - 播放高亮 overlay 与 React 状态解耦。
+- 播放可靠性诊断：
+  - 实际输出模式和 fallback reason；
+  - alphaSynth 脚本、SF2、MIDI 加载耗时；
+  - parse/render worker 耗时；
+  - 播放期间 long task 观察；
+  - overlay 更新指标。
 
-- Electron main process scaffolded.
-- Secure preload bridge scaffolded.
-- React renderer scaffolded.
-- Vite development server configured.
-- TypeScript compilation configured for renderer and Electron code.
-- Local `.mid` / `.midi` file import.
-- MIDI parsing through `@tonejs/midi`.
-- Numbered notation rendering.
-- Pure Web Audio synthesis playback.
-- alphaSynth + SF2 SoundFont playback.
-- Playback controls: play, pause, stop, seek, and speed.
-- Settings page for playback mode, default speed, master volume, and follow
-  playback.
-- SQLite-backed persistent settings.
-- Windows portable `.exe` packaging configuration.
+## 环境要求
 
-## Requirements
+- Node.js 16.19 或更新版本。
+- npm 8 或更新版本。
 
-- Node.js 16.19 or newer.
-- npm 8 or newer.
+项目仍以 Node 16 为目标，因此依赖版本保持相对保守。
 
-The initial dependency versions are selected to run on the current local Node
-16 environment. Future releases may raise the minimum Node version after the
-core architecture is stable.
+## 快速开始
 
-## Getting Started
-
-Install dependencies:
+安装依赖：
 
 ```bash
 npm install
 ```
 
-Run the desktop app in development mode:
+启动开发模式：
 
 ```bash
 npm run dev
 ```
 
-The renderer development server runs at:
+Renderer 开发服务器地址：
 
 ```text
 http://127.0.0.1:5173
 ```
 
-Build the app:
+构建应用：
 
 ```bash
 npm run build
 ```
 
-Build a Windows portable executable:
+构建 Windows portable 可执行文件：
 
 ```bash
 npm run dist:portable
 ```
 
-The portable build is written to:
+portable 构建产物写入 `release/`，该目录已被 git 忽略。
 
-```text
-release/midi-studio-0.1.0-portable.exe
-```
+## 脚本
 
-This build is unsigned. Windows may show a SmartScreen warning until the app is
-code-signed.
-
-Preview the built renderer:
-
-```bash
-npm run preview
-```
-
-Run type checks:
-
-```bash
-npm run typecheck
-```
-
-## Scripts
-
-| Script | Description |
+| 脚本 | 说明 |
 | --- | --- |
-| `npm run dev` | Starts Vite and Electron together. |
-| `npm run dev:renderer` | Starts the Vite renderer server only. |
-| `npm run dev:electron` | Waits for Vite, compiles Electron code, and starts Electron. |
-| `npm run build` | Builds Electron main/preload code and the renderer bundle. |
-| `npm run dist:dir` | Builds an unpacked Windows app directory for debugging packaging output. |
-| `npm run dist:portable` | Builds an unsigned Windows portable executable. |
-| `npm run preview` | Serves the built renderer bundle locally. |
-| `npm run typecheck` | Runs TypeScript checks for both renderer and Electron projects. |
+| `npm run dev` | 同时启动 Vite 和 Electron。 |
+| `npm run dev:renderer` | 只启动 Vite renderer server。 |
+| `npm run dev:electron` | 等待 Vite、编译 Electron 代码并启动 Electron。 |
+| `npm run build` | 构建 Electron main/preload 和 renderer bundle。 |
+| `npm run dist:dir` | 构建未打包的 Windows app 目录，用于调试 packaging 输出。 |
+| `npm run dist:portable` | 构建未签名的 Windows portable 可执行文件。 |
+| `npm run preview` | 本地预览构建后的 renderer bundle。 |
+| `npm run typecheck` | 检查 renderer 和 Electron TypeScript。 |
+| `npm run validate:score-fixtures` | 校验仓库内的乐谱 JSON fixture。 |
 
-## Project Layout
+## 项目结构
 
 ```text
 midi-studio/
   src/
-    main/       Electron main process
-    preload/    Isolated bridge exposed to the renderer
-    renderer/   React application and MIDI player prototype
+    main/          Electron 主进程、资源协议、设置 IPC
+    preload/       暴露给 renderer 的隔离桥
+    renderer/
+      features/    React 功能界面和五线谱 UI
+      lib/
+        midi.ts    MIDI 解析和标准化曲目模型
+        player/    alphaSynth / WebAudio 播放引擎
+        score/     MIDI 到 ScoreDraft 的算法管线
+        staff/     RenderScore 布局和 SVG 导出辅助
+        playbackMap/
+        time.ts
+      workers/     MIDI parse worker 和 score render worker
   public/
-    soundfonts/ Bundled SF2 SoundFont assets
-    vendor/     Bundled browser-side vendor assets
-  index.html    Vite HTML entry
+    soundfonts/    内置 SF2 SoundFont
+    vendor/        内置 alphaSynth browser script
 ```
 
-## Architecture Notes
+## 架构说明
 
-- The renderer runs as a normal React application.
-- The Electron main process owns the desktop window lifecycle.
-- The preload script is the only bridge between the renderer and privileged
-  Electron APIs.
-- `contextIsolation` is enabled and `nodeIntegration` is disabled in the
-  renderer window.
-- User settings are stored by the Electron main process in SQLite. Development
-  uses `data/midi-studio.sqlite3` under the repo root. Portable builds use
-  `data/midi-studio.sqlite3` next to the portable executable, using
-  `PORTABLE_EXECUTABLE_DIR` when available.
-- alphaSynth and SF2 assets are served to the renderer through the Electron
-  custom protocol `midi-studio-resource://assets/...`. This keeps development
-  and portable builds on the same resource loading path and avoids importing
-  public assets through Vite transforms.
-- Development loads the renderer from Vite.
-- Production loads the built renderer from `dist/renderer/index.html`.
-- Windows portable builds disable executable signing/resource editing with
-  `win.signAndEditExecutable: false` so unsigned portable builds do not require
-  local symlink privileges for `winCodeSign`.
+- Renderer 是普通 React 应用。
+- Electron main process 负责窗口生命周期、资源协议和设置存储。
+- Preload 是 renderer 与 Electron 权限能力之间的唯一桥。
+- `contextIsolation` 保持开启，`nodeIntegration` 保持关闭。
+- alphaSynth 和 SF2 资源通过 `midi-studio-resource://assets/...` 加载，避免从
+  renderer source 直接 import `public/` 资源。
+- MIDI 解析和五线谱生成运行在 Worker 中，避免阻塞播放关键路径。
+- 播放 clock 不驱动 React 高频 rerender；五线谱高亮使用 imperative overlay 和
+  聚合诊断。
 
-## Packaging Notes
-
-The project targets portable Windows builds first. The configured command is:
-
-```bash
-npm run dist:portable
-```
-
-It uses `electron-builder` with the `portable` target and writes artifacts to
-`release/`, which is ignored by git.
-
-The script sets `CSC_IDENTITY_AUTO_DISCOVERY=false` and the Windows builder
-configuration sets `signAndEditExecutable: false`. This intentionally skips
-code signing for local unsigned builds and avoids `winCodeSign` extraction
-errors on Windows accounts that cannot create symbolic links.
-
-The build uses `asarUnpack` for the bundled SoundFont, alphaSynth script, and
-`sqlite3` native module:
+完整系统架构与技术实现见：
 
 ```text
-dist/renderer/soundfonts/**/*
-dist/renderer/vendor/alphasynth/**/*
-node_modules/sqlite3/**/*
+docs/system-architecture-and-technical-implementation.md
 ```
 
-`npmRebuild` is currently disabled because this local Windows environment uses
-the already installed `sqlite3` N-API binding. If the native dependency set
-changes, verify `npm run dist:dir` before publishing portable builds.
+## 验证
 
-## Bundled Audio Assets
+提交前至少运行：
 
-The SF2 engine uses these local assets:
+```bash
+npm run typecheck
+npm run validate:score-fixtures
+npm run build
+```
+
+UI 改动还应运行：
+
+```bash
+npm run dev
+```
+
+并检查：
+
+```text
+http://127.0.0.1:5173
+```
+
+## 内置音频资源
+
+SF2 播放链路使用这些本地资源：
 
 ```text
 public/vendor/alphasynth/alphaSynth.min.js
 public/soundfonts/midiSound-2025-1-14.sf2
 ```
 
-The user has confirmed that alphaSynth is open source and the bundled SF2 file
-is authorized for this project. Keep future SoundFont changes documented here
-and avoid replacing the file without confirming redistribution rights.
+用户已确认 alphaSynth 为开源资源，当前 SF2 文件允许用于本项目。后续不要在未确认
+再分发权利的情况下替换 SoundFont；替换时也需要同步更新文档。
 
-## Roadmap
+## 路线图
 
-- Import local MIDI files.
-- Improve the playback engine abstraction.
-- Improve numbered notation rendering.
-- Add staff notation rendering.
-- Add piano keyboard playback visualization.
-- Improve soundfont-backed audio quality and fallback behavior.
-- Add offline MP3 rendering and timeline mapping.
-- Package desktop releases.
+- 继续改进 quantization：扩展 tuplet 候选，并用 fixture 对 penalty 做校准。
+- 改进 engraving geometry：更强的 spacing、collision solving 和 glyph metric。
+- 从 `ScoreDraft` 导出 MusicXML。
+- 增加钢琴键盘可视化。
+- 增加谱面图片/PDF 和离线音频导出。
+- 继续扩展播放和渲染可靠性诊断。
 
-## Contributing
-
-This project is intentionally small at the moment. Keep changes scoped,
-typed, and easy to review. Prefer improving the foundation before adding broad
-feature surfaces.
-
-Before opening a pull request, run:
-
-```bash
-npm run typecheck
-npm run build
-```
-
-## License
+## 许可证
 
 MIT

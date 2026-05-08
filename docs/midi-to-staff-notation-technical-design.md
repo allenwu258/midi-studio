@@ -17,8 +17,8 @@ C:\Users\Trivedi\projects\midi-studio
 
 ## 目标
 
-当前 `midi-studio` 已有 MIDI 解析、播放、编号谱和 alphaSynth + SF2 播放。
-下一阶段如果要实现五线谱和 MusicXML，核心问题不是 XML 序列化，而是从
+当前 `midi-studio` 已有 MIDI 解析、播放、五线谱主视图和 alphaSynth + SF2 播放。
+下一阶段如果要继续提升五线谱质量并实现 MusicXML，核心问题不是 XML 序列化，而是从
 MIDI 演奏事件推断乐谱语义：
 
 - 小节、拍号、弱起和速度结构。
@@ -56,6 +56,47 @@ Parsed MIDI
 
 不要让 MIDI 解析器直接输出 MusicXML。中间模型是后续交互调参、五线谱渲染、
 错误诊断和导出稳定性的关键。
+
+## 当前实现进展
+
+截至当前 `codex/staff-notation-pipeline` 分支，本文档中的核心 ScoreDraft 管线已经
+部分落地，但 MusicXML 导出仍未实现。
+
+已实现：
+
+- `src/renderer/lib/midi.ts` 输出包含 tick、track、program、channel、tempo、拍号、
+  调号的 `ParsedSong`。
+- MIDI 解析已搬到 `midiParseWorker`。
+- 五线谱生成已搬到 `scoreRenderWorker`。
+- `src/renderer/lib/score/` 已包含：
+  - `measureMap.ts`
+  - `meterStructure.ts`
+  - `quantization.ts`
+  - `durations.ts`
+  - `rhythmSpelling.ts`
+  - `pitchSpelling.ts`
+  - `pianoSplit.ts`
+  - `voices.ts`
+  - `createScoreDraft.ts`
+- `ScoreDraft` 已支持 part、staff、voice、measure、chord、rest、tie、tuplet、
+  diagnostics。
+- Quantization 已从 nearest-grid baseline 升级为小节级 beam search，候选同时评分
+  start、duration、tuplet、tie/readability、rest complexity 和 voice hint。
+- 声部分离已实现 measure/window search，量化阶段的 voice hint 会作为后续搜索偏好。
+- 钢琴双谱表拆分已实现 DP baseline。
+- 五线谱渲染器已自研落地在 `src/renderer/lib/staff/`，包含 layout、spacing、
+  glyph metrics、beams、collision avoidance 和 SVG export helper。
+- `src/renderer/lib/playbackMap/` 已实现播放位置到乐谱元素的映射。
+
+仍未实现或仍不完整：
+
+- MusicXML exporter。
+- 完整 Import Options UI。
+- 5、6、7 等泛化 tuplet 和嵌套 tuplet。
+- Human performance detection / beat adjustment。
+- Pedal controller 转 pedal marks。
+- SMuFL 字体和出版级 engraving solver。
+- 用 MuseScore 对照 fixture 对 penalty 做系统校准。
 
 ## MuseScore 源码映射
 
@@ -192,10 +233,10 @@ src/renderer/lib/score/
 
 ```text
 src/renderer/lib/score/types.ts
-src/renderer/lib/score/fraction.ts
 src/renderer/lib/score/createScoreDraft.ts
-src/renderer/lib/score/quantize.ts
-src/renderer/lib/score/meter.ts
+src/renderer/lib/score/quantization.ts
+src/renderer/lib/score/meterStructure.ts
+src/renderer/lib/score/rhythmSpelling.ts
 src/renderer/lib/score/voices.ts
 src/renderer/lib/score/pianoSplit.ts
 src/renderer/lib/score/musicxml.ts
@@ -958,7 +999,8 @@ for each staff:
 考虑到项目已使用 alphaSynth，alphaTab 生态可能更贴近现有播放链路。但如果目标是
 标准五线谱 MusicXML 预览，OpenSheetMusicDisplay 更直接。
 
-不要在第一阶段自研完整 staff renderer。先把 ScoreDraft 和 MusicXML 做稳。
+本项目当前已经选择并实现了轻量自研 SVG staff renderer，以便播放高亮和位置映射可控。
+后续仍可通过 MusicXML export 对接 OSMD/Verovio/MuseScore 做高质量预览或验证。
 
 ## 可落地实施阶段
 
@@ -1159,7 +1201,7 @@ expected.musicxml.snap.xml
 
 ```text
 src/renderer/lib/midi.ts
-  -> existing playback / numbered notation
+  -> existing playback
   -> createScoreDraft()
        -> staff preview
        -> exportMusicXml()
@@ -1242,26 +1284,22 @@ Stage 1-6 提升质量。
 第一批实现文件：
 
 ```text
-src/renderer/lib/score/fraction.ts
 src/renderer/lib/score/types.ts
-src/renderer/lib/score/options.ts
 src/renderer/lib/score/measureMap.ts
-src/renderer/lib/score/chords.ts
-src/renderer/lib/score/quantize.ts
+src/renderer/lib/score/meterStructure.ts
+src/renderer/lib/score/quantization.ts
 src/renderer/lib/score/durations.ts
+src/renderer/lib/score/rhythmSpelling.ts
 src/renderer/lib/score/createScoreDraft.ts
-src/renderer/lib/score/musicxml.ts
 src/renderer/lib/score/index.ts
 ```
 
 后续增强文件：
 
 ```text
+src/renderer/lib/score/musicxml.ts
 src/renderer/lib/score/tuplets.ts
-src/renderer/lib/score/voices.ts
-src/renderer/lib/score/pianoSplit.ts
 src/renderer/lib/score/keyDetection.ts
-src/renderer/lib/score/pitchSpelling.ts
 src/renderer/lib/score/diagnostics.ts
 ```
 
@@ -1269,7 +1307,7 @@ src/renderer/lib/score/diagnostics.ts
 
 MIDI 转五线谱/MusicXML 第一阶段完成的标准：
 
-- 不破坏现有 MIDI 播放、编号谱和 alphaSynth 播放。
+- 不破坏现有 MIDI 播放、五线谱渲染和 alphaSynth 播放。
 - 一个 clean 4/4 单轨 MIDI 可以生成 ScoreDraft。
 - ScoreDraft 可以导出 well-formed MusicXML。
 - MusicXML 在 MuseScore 中可打开。
