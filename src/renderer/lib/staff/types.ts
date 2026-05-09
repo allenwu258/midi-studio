@@ -137,6 +137,9 @@ export type RenderLayoutOptions = {
   systemBottomPadding: number;
   systemGap: number;
   stemLength: number;
+  baseSliceGap: number;
+  minRhythmicGap: number;
+  rhythmicStretchFactor: number;
 };
 
 export const DEFAULT_RENDER_LAYOUT_OPTIONS: RenderLayoutOptions = {
@@ -155,5 +158,27 @@ export const DEFAULT_RENDER_LAYOUT_OPTIONS: RenderLayoutOptions = {
   systemTopPadding: 26,
   systemBottomPadding: 24,
   systemGap: 34,
-  stemLength: 42
+  stemLength: 42,
+  baseSliceGap: 8,
+  minRhythmicGap: 5,
+  rhythmicStretchFactor: 11
+};
+
+export const ENGRAVED_RENDER_LAYOUT_OPTIONS: RenderLayoutOptions = {
+  ...DEFAULT_RENDER_LAYOUT_OPTIONS,
+  pagePadding: 36,
+  scoreLeft: 96,
+  scoreRight: 36,
+  minMeasureWidth: 158,
+  clefTimeWidth: 88,
+  measureEndPadding: 28,
+  staffGap: 82,
+  partGap: 48,
+  systemTopPadding: 30,
+  systemBottomPadding: 28,
+  systemGap: 42,
+  stemLength: 39,
+  baseSliceGap: 10,
+  minRhythmicGap: 6,
+  rhythmicStretchFactor: 12
 };

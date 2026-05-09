@@ -1,3 +1,4 @@
+import type { NotationRendererMode } from "../../shared/settings";
 import type { ParsedSong } from "../lib/midi";
 import type { PlaybackMapEntry } from "../lib/playbackMap";
 import type { ScoreDraft } from "../lib/score";
@@ -6,6 +7,7 @@ import type { RenderScore } from "../lib/staff";
 export type ScoreRenderRequest = {
   requestId: number;
   song: ParsedSong;
+  rendererMode: NotationRendererMode;
   score?: ScoreDraft;
 };
 

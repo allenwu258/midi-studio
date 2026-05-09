@@ -329,7 +329,9 @@ export function App() {
       });
     };
 
-    const request: ScoreRenderRequest = musicXmlScore ? { requestId, song, score: musicXmlScore } : { requestId, song };
+    const request: ScoreRenderRequest = musicXmlScore
+      ? { requestId, song, rendererMode: settings.notationRendererMode, score: musicXmlScore }
+      : { requestId, song, rendererMode: settings.notationRendererMode };
     worker.postMessage(request);
 
     return () => {
@@ -338,7 +340,7 @@ export function App() {
         scoreRenderWorkerRef.current = null;
       }
     };
-  }, [song, musicXmlScore]);
+  }, [song, musicXmlScore, settings.notationRendererMode]);
 
   const getPlaybackPosition = useCallback(() => playerRef.current.getSnapshot().positionMs, []);
 
@@ -709,6 +711,7 @@ export function App() {
               {song ? (
                 <StaffNotationPanel
                   isRendering={scoreRenderState.status === "rendering"}
+                  rendererMode={settings.notationRendererMode}
                   getPlaybackPosition={getPlaybackPosition}
                   playbackMap={scoreRenderState.playbackMap}
                   renderError={scoreRenderState.error}

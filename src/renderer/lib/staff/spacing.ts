@@ -10,9 +10,6 @@ type SliceProfile = {
   rhythmicWeight: number;
 };
 
-const BASE_SLICE_GAP = 8;
-const MIN_RHYTHMIC_GAP = 5;
-
 export function partHeight(staffCount: number, options: RenderLayoutOptions): number {
   return options.staffHeight + Math.max(0, staffCount - 1) * options.staffGap;
 }
@@ -67,7 +64,7 @@ export function xForEvent(event: ScoreEvent, measureLayout: RenderMeasure, optio
 
   const measureTicks = Math.max(1, measure.endTicks - measure.startTicks);
   const localRatio = (event.startTicks - measure.startTicks) / measureTicks;
-  const leading = measureLayout.offset === 0 ? options.clefTimeWidth : 20;
+  const leading = measureLayout.offset === 0 ? options.clefTimeWidth : options.baseSliceGap + 12;
   const drawableWidth = Math.max(44, measureLayout.width - leading - options.measureEndPadding);
   return measureLayout.x + leading + localRatio * drawableWidth;
 }
@@ -78,9 +75,9 @@ function createMeasureSpacing(
   offset: number,
   options: RenderLayoutOptions
 ): RenderMeasureSpacing {
-  const leading = offset === 0 ? options.clefTimeWidth : 20;
+  const leading = offset === 0 ? options.clefTimeWidth : options.baseSliceGap + 12;
   const profiles = createSliceProfiles(score, measure);
-  const slices = createMinimumSlices(profiles, measure, score.ppq);
+  const slices = createMinimumSlices(profiles, measure, score.ppq, options);
   const minDrawableWidth = slices.length
     ? Math.max(44, slices[slices.length - 1].x + slices[slices.length - 1].minRight)
     : 44;
@@ -186,7 +183,12 @@ function createSliceProfiles(score: ScoreDraft, measure: ScoreMeasure): SlicePro
   return [...profiles.values()].sort((a, b) => a.ticks - b.ticks);
 }
 
-function createMinimumSlices(profiles: SliceProfile[], measure: ScoreMeasure, ppq: number): RenderTimeSlice[] {
+function createMinimumSlices(
+  profiles: SliceProfile[],
+  measure: ScoreMeasure,
+  ppq: number,
+  options: RenderLayoutOptions
+): RenderTimeSlice[] {
   if (!profiles.length) {
     return [];
   }
@@ -205,8 +207,8 @@ function createMinimumSlices(profiles: SliceProfile[], measure: ScoreMeasure, pp
   for (const profile of profiles.slice(1)) {
     const tickDistance = Math.max(1, profile.ticks - previous.ticks);
     const stretchWeight = Math.sqrt(tickDistance / Math.max(1, ppq));
-    const rhythmicGap = MIN_RHYTHMIC_GAP + stretchWeight * 11;
-    const minGap = previous.minRight + profile.minLeft + BASE_SLICE_GAP + rhythmicGap;
+    const rhythmicGap = options.minRhythmicGap + stretchWeight * options.rhythmicStretchFactor;
+    const minGap = previous.minRight + profile.minLeft + options.baseSliceGap + rhythmicGap;
     x += minGap * Math.max(0.85, Math.min(1.45, profile.rhythmicWeight));
     slices.push({
       ticks: profile.ticks,
@@ -221,7 +223,7 @@ function createMinimumSlices(profiles: SliceProfile[], measure: ScoreMeasure, pp
   const measureTicks = Math.max(1, measure.endTicks - measure.startTicks);
   const finalTickDistance = Math.max(1, measure.endTicks - previous.ticks);
   if (previous.ticks < measure.endTicks && finalTickDistance < measureTicks) {
-    x += MIN_RHYTHMIC_GAP + Math.sqrt(finalTickDistance / Math.max(1, ppq)) * 8;
+    x += options.minRhythmicGap + Math.sqrt(finalTickDistance / Math.max(1, ppq)) * 8;
   }
 
   return slices;

@@ -260,6 +260,10 @@ h3 {
   min-width: 760px;
   display: block;
   overflow: visible;
+  border: 1px solid #e3e8ef;
+  border-radius: 6px;
+  background: #fffdf8;
+  box-shadow: 0 12px 32px rgb(31 45 61 / 0.08);
   font-family: "Segoe UI Symbol", "Noto Music", "Bravura", "Segoe UI", serif;
 }
 

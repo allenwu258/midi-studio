@@ -1,6 +1,7 @@
+import { DEFAULT_SETTINGS } from "../../shared/settings";
 import { buildPlaybackMap } from "../lib/playbackMap";
 import { createScoreDraft } from "../lib/score";
-import { layoutScore } from "../lib/staff";
+import { ENGRAVED_RENDER_LAYOUT_OPTIONS, layoutScore } from "../lib/staff";
 import type { ScoreRenderRequest, ScoreRenderResponse } from "./scoreRenderMessages";
 
 type ScoreRenderWorkerScope = {
@@ -11,12 +12,16 @@ type ScoreRenderWorkerScope = {
 const workerScope = self as unknown as ScoreRenderWorkerScope;
 
 workerScope.onmessage = (event) => {
-  const { requestId, song, score: sourceScore } = event.data;
+  const { requestId, song, rendererMode, score: sourceScore } = event.data;
   const startedAt = performance.now();
 
   try {
+    const mode = rendererMode ?? DEFAULT_SETTINGS.notationRendererMode;
     const score = sourceScore ?? createScoreDraft({ song });
-    const renderScore = layoutScore(score);
+    const renderScore = layoutScore(
+      score,
+      mode === "engraved" ? ENGRAVED_RENDER_LAYOUT_OPTIONS : undefined
+    );
     const playbackMap = buildPlaybackMap(score);
 
     workerScope.postMessage({

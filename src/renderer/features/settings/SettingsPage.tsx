@@ -56,6 +56,27 @@ export function SettingsPage({
 
       <section className="settings-section">
         <div className="settings-copy">
+          <h3>谱面渲染</h3>
+          <p>新版渲染器使用统一 SVG engraving 样式；经典渲染器保留旧的 JSX 绘制路径。</p>
+        </div>
+        <div className="segmented-control" aria-label="谱面渲染">
+          <ModeButton
+            active={settings.notationRendererMode === "engraved"}
+            disabled={isSaving}
+            label="新版"
+            onClick={() => onUpdate({ notationRendererMode: "engraved" })}
+          />
+          <ModeButton
+            active={settings.notationRendererMode === "classic"}
+            disabled={isSaving}
+            label="经典"
+            onClick={() => onUpdate({ notationRendererMode: "classic" })}
+          />
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <div className="settings-copy">
           <h3>默认速度</h3>
           <p>打开新 MIDI 文件时使用的初始播放速度。</p>
         </div>
