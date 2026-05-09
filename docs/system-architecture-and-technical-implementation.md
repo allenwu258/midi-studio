@@ -912,6 +912,19 @@ src/shared/settings.ts
 - 切换谱面渲染模式时应重新请求 score render worker，确保 layout options 与屏幕/导出
   renderer 匹配。
 
+### 9.1 播放栏锁定状态
+
+底部 transport 的锁定状态当前是 renderer 内的 UI-local state：
+
+- 默认锁定，作为类似 Office 工具栏的固定底部播放栏。
+- 用户可点击图钉按钮取消锁定，取消后 transport 回到页面文档流末尾，需要滚动到底部才
+  能看到。
+- 该状态不写入 SQLite，不属于 `UserSettings`，刷新或重启后回到默认锁定。
+- 固定时 `App.tsx` 使用 `ResizeObserver` 测量 toolbar 实际高度并写入
+  `--transport-lock-offset`，由 CSS 计算底部 padding，避免换行、缩放或窄屏时遮挡谱面。
+- 图钉按钮使用 `aria-pressed` 和 `aria-label` 表达状态；视觉上锁定为竖直 pin，未锁定为
+  斜放 pin + slash，不只依赖颜色区分。
+
 ## 10. 诊断系统
 
 ### 10.1 Player Diagnostics

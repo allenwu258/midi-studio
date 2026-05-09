@@ -19,6 +19,7 @@ English README: [README.en.md](README.en.md)
   ScriptProcessor 并记录诊断。
 - 保留纯 Web Audio 合成器作为备用播放模式。
 - 支持播放、暂停、停止、seek、调速和主音量。
+- 底部播放栏默认锁定在窗口底部，也可取消锁定后随页面滚动到末尾。
 - 设置通过 SQLite 持久化。
   - 播放模式可在 `SF2 合成` / `纯 MIDI` 间切换；
   - 谱面渲染模式可在 `Engraved SVG` / `Classic JSX` 间切换。
@@ -143,6 +144,8 @@ midi-studio/
   `Classic JSX` 选择对应 layout options。
 - 播放 clock 不驱动 React 高频 rerender；五线谱高亮使用 imperative overlay 和
   聚合诊断。
+- 底部 transport 可锁定为固定工具栏；固定时根据真实 toolbar 高度动态预留底部空间，
+  避免遮挡谱面内容。
 
 完整系统架构与技术实现见：
 

@@ -20,6 +20,8 @@ Chinese README: [README.md](README.md)
   ScriptProcessor fallback diagnostics.
 - Pure Web Audio synth fallback.
 - Playback controls: play, pause, stop, seek, speed, and master volume.
+- The bottom transport bar is locked to the window bottom by default and can be
+  unlocked back into the page flow.
 - Persistent settings backed by SQLite.
   - Playback mode can switch between `SF2 Synth` and `Basic MIDI`.
   - Notation rendering can switch between `Engraved SVG` and `Classic JSX`.
@@ -150,6 +152,8 @@ midi-studio/
   chooses matching layout options for `Engraved SVG` or `Classic JSX`.
 - The playback clock is decoupled from React state; score highlighting uses an
   imperative overlay and throttled diagnostics.
+- The bottom transport can be locked as a fixed toolbar; the renderer reserves
+  bottom space from the measured toolbar height to avoid covering notation.
 
 For the complete architecture and technical implementation details, see:
 

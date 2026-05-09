@@ -73,7 +73,7 @@ src/renderer/features/notation/StaffNotationPanel.tsx
 ```text
 sidebar metadata / import diagnostics
 main staff notation viewport
-bottom transport
+bottom transport, locked by default
 ```
 
 播放时：
@@ -82,6 +82,7 @@ bottom transport
 - 已播放区域有轻量状态。
 - 拖动底部进度条时，五线谱定位同步到对应小节/音符。
 - 点击乐谱上的音符、和弦或小节区域，可以 seek 到对应播放位置。
+- 底部播放栏默认固定在窗口底部，用户可通过图钉按钮取消锁定并恢复为页面底部栏。
 
 第一版不追求专业排版软件质量，但必须做到：
 
