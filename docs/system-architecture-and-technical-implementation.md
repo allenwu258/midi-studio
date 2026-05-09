@@ -842,17 +842,27 @@ src/renderer/lib/staff/beams.ts
 
 ```text
 src/renderer/features/notation/StaffNotationPanel.tsx
+src/renderer/features/notation/LegacyScoreSvg.tsx
+src/renderer/lib/staff/svgRenderer.ts
+src/renderer/lib/staff/legacySvgRenderer.ts
+src/renderer/lib/staff/svgExport.ts
 ```
 
 职责：
 
-- 渲染静态 `RenderScore`。
+- 按用户设置在 `Engraved SVG` 与 `Classic JSX` 之间切换静态谱面渲染。
+- `Engraved SVG` 使用 `svgRenderer.ts` 生成统一 SVG markup，屏幕渲染通过
+  `dangerouslySetInnerHTML` 挂载，SVG 导出复用同一 body/style helper。
+- `Classic JSX` 使用 `LegacyScoreSvg.tsx` 保留旧 JSX/ellipse/text fallback 路径。
+- `legacySvgRenderer.ts` 保留 classic 的字符串导出路径，避免 SVG export 永远被
+  Engraved renderer 接管。
 - 为 chord 绑定 `data-score-element-id`。
 - 处理点击 seek。
 - 渲染 diagnostics。
 - 使用 `<g ref={activeOverlayRef}>` 作为播放高亮 overlay。
 
-静态谱面通过 memo 避免播放时重绘。
+静态谱面通过 memo 避免播放时重绘。播放 overlay 独立于静态层，但会根据当前
+renderer mode 选择匹配的 notehead、stem、beam、tie 尺寸。
 
 ### 8.7 Playback Overlay
 
@@ -882,14 +892,25 @@ src/shared/settings.ts
 职责：
 
 - 读取用户设置。
-- 更新播放模式、默认速度、主音量等。
+- 更新播放模式、谱面渲染模式、默认速度、主音量等。
 - 保存到 SQLite。
+
+当前稳定设置项：
+
+- `playbackEngineMode`: `sf2-synth` / `basic-midi`。
+- `notationRendererMode`: `engraved` / `classic`，UI 显示为 `Engraved SVG` /
+  `Classic JSX`。
+- `defaultSpeedPercent`。
+- `masterVolumePercent`。
+- `followPlayback`。
 
 重要约束：
 
 - 设置写入通过 `settingsSaveQueueRef` 串行化。
 - 快速 slider 或模式变更不能让旧 SQLite 响应覆盖新状态。
 - 切换播放器时必须先创建并加载新引擎，再 dispose 旧引擎。
+- 切换谱面渲染模式时应重新请求 score render worker，确保 layout options 与屏幕/导出
+  renderer 匹配。
 
 ## 10. 诊断系统
 
@@ -1131,7 +1152,7 @@ sequenceDiagram
   UI->>Parse: postMessage(buffer copy, fileName, requestId)
   UI->>Player: load(raw MIDI bytes copy)
   Parse-->>UI: ParsedSong or parse error
-  UI->>Score: postMessage(ParsedSong, requestId)
+  UI->>Score: postMessage(ParsedSong, requestId, notationRendererMode)
   Score-->>UI: ScoreDraft + RenderScore + PlaybackMap
   UI->>Staff: render static SVG score
   Player-->>UI: snapshot / diagnostics
@@ -1149,8 +1170,35 @@ sequenceDiagram
 - 每次打开文件生成新的 request id。
 - 旧 parse/score worker 响应如果 request id 不匹配，必须丢弃。
 - player load 使用 generation/load id，旧 load 完成后不能覆盖新文件或新引擎。
+- score render request 必须携带 `rendererMode`；worker 内部仍用
+  `DEFAULT_SETTINGS.notationRendererMode` 兜底旧消息，但正常调用不应省略。
 
-### 17.3 播放模式切换
+### 17.3 谱面渲染模式切换
+
+渲染模式由 SQLite 设置持久化：
+
+```text
+settings.notationRendererMode
+  -> scoreRenderWorker request
+  -> layoutScore(score, mode-specific options)
+  -> StaffNotationPanel chooses Engraved SVG or Classic JSX static layer
+  -> playback overlay uses matching geometry constants
+```
+
+模式语义：
+
+- `Engraved SVG`：默认模式，使用 `ENGRAVED_RENDER_LAYOUT_OPTIONS`、`svgRenderer.ts`
+  和统一 SVG export helper，目标是更接近 engraving engine 的视觉基础。
+- `Classic JSX`：旧模式，使用 `DEFAULT_RENDER_LAYOUT_OPTIONS` 和
+  `LegacyScoreSvg.tsx`，用于回退、对照和排查 Engraved 渲染问题。
+
+注意：
+
+- 不要移除 Classic 路径；它是当前视觉迭代期间的回退引擎。
+- SVG 导出必须显式传入 renderer mode，避免用 Classic layout 生成 Engraved SVG 或反向
+  错配。
+
+### 17.4 播放模式切换
 
 切换顺序必须保持：
 
@@ -1167,7 +1215,7 @@ create new engine
 - 如果先 dispose 旧引擎，新引擎加载失败时会丢掉仍可工作的播放器。
 - alphaSynth 初始化和 SF2/MIDI 加载是异步过程，必须用 generation 防止晚到响应污染状态。
 
-### 17.4 播放高亮
+### 17.5 播放高亮
 
 ```text
 Player internal clock
@@ -1328,14 +1376,15 @@ SVG/PNG/PDF 导出应从 `RenderScore` 走：
 
 ```text
 RenderScore
-  -> renderScoreToSvg()
+  -> renderScoreToSvg(renderScore, rendererMode)
   -> SVG file
   -> PNG/PDF renderer
 ```
 
 注意：
 
-- `renderScoreToSvg()` 属于功能分支可保留能力。
+- `renderScoreToSvg(renderScore, rendererMode)` 属于功能分支可保留能力。
+- 导出路径必须和生成 `RenderScore` 时的 layout mode 保持一致。
 - MuseScore CLI 对照、视觉 diff 和结构 diff 属于独立离线对照分支，不默认进入主功能分支。
 
 ## 21. 性能预算与可观测指标

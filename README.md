@@ -20,6 +20,8 @@ English README: [README.en.md](README.en.md)
 - 保留纯 Web Audio 合成器作为备用播放模式。
 - 支持播放、暂停、停止、seek、调速和主音量。
 - 设置通过 SQLite 持久化。
+  - 播放模式可在 `SF2 合成` / `纯 MIDI` 间切换；
+  - 谱面渲染模式可在 `Engraved SVG` / `Classic JSX` 间切换。
 - MIDI 转五线谱管线：
   - 小节图和拍号边界对齐；
   - 带调号意识的音高拼写；
@@ -36,9 +38,12 @@ English README: [README.en.md](README.en.md)
   - `npm run validate:musicxml-fixtures` 覆盖单声部、和弦、rest、backup/forward、多
     voice、双谱表、tie、tempo、key/time change 和 `.mxl`。
 - 五线谱渲染：
+  - 可切换 `Engraved SVG` 和 `Classic JSX` 两条渲染路径，默认使用
+    `Engraved SVG`，旧 JSX 引擎仍保留为回退/对照；
+  - `Engraved SVG` 使用统一 SVG 字符串渲染源，屏幕显示和 SVG 导出共享同一
+    markup/style helper；
   - SVG staff system、谱号、小节、音符、休止符、tie、beam、tuplet；
-  - time-slice spacing；
-  - glyph boxes 和基础 collision avoidance；
+  - time-slice spacing、glyph boxes 和基础 collision avoidance；
   - 播放高亮 overlay 与 React 状态解耦。
 - 播放可靠性诊断：
   - 实际输出模式和 fallback reason；
@@ -116,7 +121,7 @@ midi-studio/
         midi.ts    MIDI 解析和标准化曲目模型
         player/    alphaSynth / WebAudio 播放引擎
         score/     MIDI 到 ScoreDraft 的算法管线
-        staff/     RenderScore 布局和 SVG 导出辅助
+        staff/     RenderScore 布局、Engraved/Classic SVG 渲染和导出辅助
         playbackMap/
         time.ts
       workers/     MIDI parse worker 和 score render worker
@@ -134,6 +139,8 @@ midi-studio/
 - alphaSynth 和 SF2 资源通过 `midi-studio-resource://assets/...` 加载，避免从
   renderer source 直接 import `public/` 资源。
 - MIDI 解析和五线谱生成运行在 Worker 中，避免阻塞播放关键路径。
+- Score render worker 会接收当前谱面渲染模式，并按 `Engraved SVG` /
+  `Classic JSX` 选择对应 layout options。
 - 播放 clock 不驱动 React 高频 rerender；五线谱高亮使用 imperative overlay 和
   聚合诊断。
 
@@ -180,7 +187,8 @@ public/soundfonts/midiSound-2025-1-14.sf2
 ## 路线图
 
 - 继续改进 quantization：扩展 tuplet 候选，并用 fixture 对 penalty 做校准。
-- 改进 engraving geometry：更强的 spacing、collision solving 和 glyph metric。
+- 改进 engraving geometry：更强的 spacing、collision solving、真实 SMuFL 字体和
+  glyph metric。
 - 继续补 MusicXML 导入覆盖和谱面保真，再推进 MusicXML 导出。
 - 从 `ScoreDraft` 导出 MusicXML。
 - 增加钢琴键盘可视化。

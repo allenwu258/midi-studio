@@ -21,6 +21,8 @@ Chinese README: [README.md](README.md)
 - Pure Web Audio synth fallback.
 - Playback controls: play, pause, stop, seek, speed, and master volume.
 - Persistent settings backed by SQLite.
+  - Playback mode can switch between `SF2 Synth` and `Basic MIDI`.
+  - Notation rendering can switch between `Engraved SVG` and `Classic JSX`.
 - MIDI-to-staff pipeline:
   - measure map and time signature alignment;
   - pitch spelling with key awareness;
@@ -39,9 +41,13 @@ Chinese README: [README.md](README.md)
     backup/forward, multiple voices, grand staff, ties, tempo, key/time changes,
     tuplets, and `.mxl`.
 - Staff renderer:
+  - switchable `Engraved SVG` and `Classic JSX` rendering paths, with
+    `Engraved SVG` as the default and the old JSX renderer preserved as a
+    fallback/comparison path;
+  - `Engraved SVG` shares the same SVG markup/style helpers between the screen
+    renderer and SVG export;
   - SVG staff systems, clefs, measures, notes, rests, ties, beams, tuplets;
-  - time-slice spacing;
-  - glyph boxes and baseline collision avoidance;
+  - time-slice spacing, glyph boxes, and baseline collision avoidance;
   - imperative playback overlay to avoid React rerender pressure.
 - Playback reliability diagnostics:
   - output mode and fallback reason;
@@ -120,7 +126,7 @@ midi-studio/
         midi.ts    MIDI parsing and normalized song model
         player/    alphaSynth / WebAudio playback engines
         score/     MIDI-to-ScoreDraft algorithms
-        staff/     RenderScore layout and SVG export helpers
+        staff/     RenderScore layout, Engraved/Classic SVG rendering, export helpers
         playbackMap/
         time.ts
       workers/     MIDI parse and score render workers
@@ -140,6 +146,8 @@ midi-studio/
   `midi-studio-resource://assets/...`.
 - MIDI parsing and score rendering run in workers so notation work does not
   block the playback-critical UI path.
+- The score render worker receives the current notation renderer mode and
+  chooses matching layout options for `Engraved SVG` or `Classic JSX`.
 - The playback clock is decoupled from React state; score highlighting uses an
   imperative overlay and throttled diagnostics.
 
@@ -187,7 +195,8 @@ and updating this documentation.
 
 - Improve quantization with broader tuplet candidates and fixture-driven
   penalty calibration.
-- Improve engraving geometry with stronger spacing and collision solving.
+- Improve engraving geometry with stronger spacing, collision solving, real
+  SMuFL fonts, and glyph metrics.
 - Expand MusicXML import coverage and score fidelity before export work.
 - Add MusicXML export from `ScoreDraft`.
 - Add piano keyboard visualization.

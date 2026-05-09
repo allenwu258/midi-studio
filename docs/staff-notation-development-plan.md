@@ -154,6 +154,8 @@ src/renderer/lib/staff/
   glyphMetrics.ts
   beams.ts
   collisions.ts
+  svgRenderer.ts
+  legacySvgRenderer.ts
   svgExport.ts
   index.ts
 
@@ -164,6 +166,7 @@ src/renderer/lib/playbackMap/
   index.ts
 
 src/renderer/features/notation/
+  LegacyScoreSvg.tsx
   StaffNotationPanel.tsx
 ```
 
@@ -322,11 +325,21 @@ export function findSeekPositionForElement(
 - 简单 chord 垂直叠放。
 - tie 可以先用 bezier 曲线。
 
+当前实现状态：
+
+- `Classic JSX` 保留旧 React JSX 渲染路径，主要使用 ellipse/text 等 fallback 形状。
+- `Engraved SVG` 是默认渲染模式，使用 `src/renderer/lib/staff/svgRenderer.ts` 输出
+  统一 SVG markup，并由屏幕渲染和 `renderScoreToSvg(renderScore, rendererMode)` 共享。
+- 设置页提供 `notationRendererMode` 持久化切换，首页侧栏显示当前渲染器名字。
+- `scoreRenderWorker` 根据渲染模式选择 `DEFAULT_RENDER_LAYOUT_OPTIONS` 或
+  `ENGRAVED_RENDER_LAYOUT_OPTIONS`，避免 layout 坐标和实际 renderer 常量错配。
+
 符号来源：
 
-- 第一版可以使用文本 glyph 或简化 SVG path。
-- 不引入完整 SMuFL 字体前，符头/符干/小节线可用 SVG primitives。
-- 后续再引入 Bravura/SMuFL 以改善专业观感。
+- `Engraved SVG` 已把 notehead 从 ellipse fallback 替换为 SVG path，并统一 staff
+  stroke、notehead、stem、beam、rest、clef、time signature 的基础比例。
+- 谱号、休止符和临时记号仍依赖音乐字体/text glyph fallback。
+- 后续再引入 Bravura/SMuFL 字体文件和真实 glyph metrics，以改善专业观感并减少平台字体差异。
 
 布局策略：
 
@@ -510,6 +523,31 @@ StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 - 多轨 MIDI 不再混成一条谱。
 - 钢琴 MIDI 可显示双谱表。
 - 播放高亮在多谱表仍正确。
+
+### Engraved SVG 渲染器（基础实现已完成）
+
+目标：
+
+- 让谱面视觉从调试级 fallback 进入可阅读、专业感更强的 engraving baseline。
+- 保留 `Classic JSX` 旧引擎作为设置项，不移除旧路径。
+- 统一屏幕 SVG 和导出 SVG 的渲染源。
+
+任务：
+
+1. 新增 `src/renderer/lib/staff/svgRenderer.ts`，集中处理 Engraved SVG 的 body/style
+   markup。
+2. 新增 `LegacyScoreSvg.tsx` 和 `legacySvgRenderer.ts`，分别保留 classic 屏幕渲染和
+   classic SVG export。
+3. 新增 `notationRendererMode` 设置项，设置页可切换 `Engraved SVG` / `Classic JSX`。
+4. `scoreRenderWorker` 接收 renderer mode，并使用匹配的 layout options。
+5. `renderScoreToSvg(renderScore, rendererMode)` 显式接收渲染模式，避免导出路径错配。
+
+验收：
+
+- 设置页可切换渲染器，首页显示当前渲染器名字。
+- Classic 模式仍输出 ellipse/text fallback。
+- Engraved 模式不再输出 ellipse notehead，使用统一 notehead path。
+- 两种模式都保留 `data-score-element-id`，播放高亮和点击 seek 不破坏。
 
 ### MusicXML 导入（已完成）
 
