@@ -100,6 +100,8 @@ export function App() {
   const playerUnsubscribeRef = useRef<(() => void) | null>(null);
   const playerDiagnosticsUnsubscribeRef = useRef<(() => void) | null>(null);
   const playerDisposeTimeoutRef = useRef<number | null>(null);
+  const appShellRef = useRef<HTMLElement | null>(null);
+  const transportRef = useRef<HTMLElement | null>(null);
   const scoreRenderWorkerRef = useRef<Worker | null>(null);
   const scoreRenderRequestIdRef = useRef(0);
   const currentLoadInputRef = useRef<PlayerLoadInput | null>(null);
@@ -121,6 +123,7 @@ export function App() {
   const [speed, setSpeed] = useState(100);
   const [error, setError] = useState("");
   const [view, setView] = useState<AppView>("player");
+  const [isTransportLocked, setIsTransportLocked] = useState(true);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [storageInfo, setStorageInfo] = useState<SettingsStorageInfo | null>(null);
   const [settingsError, setSettingsError] = useState("");
@@ -247,6 +250,37 @@ export function App() {
       isMounted = false;
     };
   }, []);
+
+  useEffect(() => {
+    const appShellElement = appShellRef.current;
+    const transportElement = transportRef.current;
+
+    if (!appShellElement || !transportElement || !isTransportLocked || view !== "player") {
+      appShellElement?.style.removeProperty("--transport-lock-offset");
+      return undefined;
+    }
+
+    const lockedAppShellElement = appShellElement;
+    const lockedTransportElement = transportElement;
+
+    function updateTransportOffset() {
+      lockedAppShellElement.style.setProperty(
+        "--transport-lock-offset",
+        `${Math.ceil(lockedTransportElement.getBoundingClientRect().height)}px`
+      );
+    }
+
+    updateTransportOffset();
+    const resizeObserver = new ResizeObserver(updateTransportOffset);
+    resizeObserver.observe(lockedTransportElement);
+    window.addEventListener("resize", updateTransportOffset);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", updateTransportOffset);
+      lockedAppShellElement.style.removeProperty("--transport-lock-offset");
+    };
+  }, [isTransportLocked, view]);
 
   useEffect(() => {
     scoreRenderRequestIdRef.current += 1;
@@ -629,7 +663,10 @@ export function App() {
   const isPlayerUnavailable = isPlayerBusy || snapshot.status === "error";
 
   return (
-    <main className="app-shell">
+    <main
+      ref={appShellRef}
+      className={`app-shell ${view === "player" && isTransportLocked ? "transport-locked" : ""}`}
+    >
       <header className="top-bar">
         <div>
           <p className="eyebrow">midi-studio</p>
@@ -733,7 +770,10 @@ export function App() {
             </section>
         </section>
 
-          <footer className="transport">
+          <footer
+            ref={transportRef}
+            className={`transport ${isTransportLocked ? "transport--locked" : "transport--unlocked"}`}
+          >
             <div className="transport-row">
               <button
                 className="button primary play-button"
@@ -769,6 +809,16 @@ export function App() {
                 />
                 <strong>{speed}%</strong>
               </label>
+              <button
+                className="button secondary transport-lock-button"
+                type="button"
+                onClick={() => setIsTransportLocked((current) => !current)}
+                aria-pressed={isTransportLocked}
+                aria-label={isTransportLocked ? "取消锁定播放栏" : "锁定播放栏"}
+                title={isTransportLocked ? "取消锁定播放栏" : "锁定播放栏"}
+              >
+                <TransportPinIcon locked={isTransportLocked} />
+              </button>
             </div>
             <PlaybackProgressControl
               disabled={!song || isPlayerUnavailable}
@@ -869,6 +919,37 @@ function PlaybackDiagnosticsPanel({
 
 function formatNotationRendererMode(mode: UserSettings["notationRendererMode"]): string {
   return mode === "engraved" ? "Engraved SVG" : "Classic JSX";
+}
+
+function TransportPinIcon({ locked }: { locked: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={`transport-lock-icon ${locked ? "transport-lock-icon--locked" : "transport-lock-icon--unlocked"}`}
+      viewBox="0 0 24 24"
+      focusable="false"
+    >
+      <path
+        className="transport-lock-icon-body"
+        d="M12 3.5c2.2 0 3.9 1.5 3.9 3.3 0 1-.5 1.9-1.3 2.5l.7 6.2H8.7l.7-6.2c-.8-.6-1.3-1.5-1.3-2.5 0-1.8 1.7-3.3 3.9-3.3Z"
+      />
+      <path
+        className="transport-lock-icon-needle"
+        d="M11.2 13.5h1.6l-.3 4.8h-1l-.3-4.8Z"
+      />
+      <path
+        className="transport-lock-icon-tip"
+        d="M12 21.5 9.7 18.3h4.6L12 21.5Z"
+      />
+      <path
+        className="transport-lock-icon-clasp"
+        d="M9.5 9.4h5"
+      />
+      {locked ? null : (
+        <path className="transport-lock-icon-slash" d="M5.2 18.8 18.8 5.2" />
+      )}
+    </svg>
+  );
 }
 
 function PlaybackClockReadout({

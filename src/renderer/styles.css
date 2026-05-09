@@ -27,6 +27,7 @@ button {
 }
 
 .app-shell {
+  --transport-lock-offset: 0px;
   min-height: 100vh;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
@@ -436,6 +437,29 @@ h3 {
   background: #ffffff;
 }
 
+.app-shell.transport-locked {
+  padding-bottom: calc(var(--transport-lock-offset) + 32px);
+}
+
+.transport--locked {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: 16px;
+  z-index: 20;
+  border: 1px solid #d9e0ea;
+  border-radius: 10px;
+  box-shadow: 0 18px 40px rgba(28, 39, 56, 0.14);
+}
+
+.transport--locked,
+.transport--unlocked {
+  transition:
+    transform 140ms ease,
+    box-shadow 140ms ease,
+    border-color 140ms ease;
+}
+
 .transport-row {
   display: flex;
   align-items: center;
@@ -471,6 +495,60 @@ h3 {
   color: #263544;
   font-variant-numeric: tabular-nums;
   text-align: right;
+}
+
+button.button.secondary.transport-lock-button {
+  flex: 0 0 38px;
+  width: 38px;
+  min-width: 38px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  color: #5c6877;
+  line-height: 1;
+}
+
+button.button.secondary.transport-lock-button[aria-pressed="true"] {
+  color: #087c73;
+  background: #dcefeb;
+}
+
+button.button.secondary.transport-lock-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: #cfe8e3;
+}
+
+.transport-lock-icon {
+  width: 19px;
+  height: 19px;
+  display: block;
+  overflow: visible;
+}
+
+.transport-lock-icon--unlocked {
+  transform: rotate(-28deg);
+  transform-origin: 50% 50%;
+}
+
+.transport-lock-icon-body,
+.transport-lock-icon-needle,
+.transport-lock-icon-tip {
+  fill: currentColor;
+}
+
+.transport-lock-icon-clasp {
+  fill: none;
+  stroke: #ffffff;
+  stroke-linecap: round;
+  stroke-width: 1.35;
+  opacity: 0.82;
+}
+
+.transport-lock-icon-slash {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.8;
+  opacity: 0.9;
 }
 
 .progress-wrap {
@@ -698,5 +776,15 @@ h3 {
 
   .notation-panel {
     padding: 16px;
+  }
+
+  .transport--locked {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+  }
+
+  button.button.secondary.transport-lock-button {
+    width: 38px;
   }
 }
