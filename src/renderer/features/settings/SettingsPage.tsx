@@ -63,13 +63,13 @@ export function SettingsPage({
           <ModeButton
             active={settings.notationRendererMode === "engraved"}
             disabled={isSaving}
-            label="新版"
+            label="Engraved SVG"
             onClick={() => onUpdate({ notationRendererMode: "engraved" })}
           />
           <ModeButton
             active={settings.notationRendererMode === "classic"}
             disabled={isSaving}
-            label="经典"
+            label="Classic JSX"
             onClick={() => onUpdate({ notationRendererMode: "classic" })}
           />
         </div>

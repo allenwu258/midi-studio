@@ -695,6 +695,10 @@ export function App() {
                   <dd>{settings.playbackEngineMode === "sf2-synth" ? "SF2 合成" : "纯 MIDI"}</dd>
                 </div>
                 <div>
+                  <dt>渲染模式</dt>
+                  <dd>{formatNotationRendererMode(settings.notationRendererMode)}</dd>
+                </div>
+                <div>
                   <dt>播放器状态</dt>
                   <dd>{formatPlayerStatus(snapshot)}</dd>
                 </div>
@@ -861,6 +865,10 @@ function PlaybackDiagnosticsPanel({
       ) : null}
     </section>
   );
+}
+
+function formatNotationRendererMode(mode: UserSettings["notationRendererMode"]): string {
+  return mode === "engraved" ? "Engraved SVG" : "Classic JSX";
 }
 
 function PlaybackClockReadout({
