@@ -5,6 +5,7 @@ import {
   beamCount,
   type RenderBeamGroup,
   type RenderBeamPoint,
+  type RenderBox,
   type RenderEvent,
   type RenderScore,
   type RenderTuplet
@@ -261,26 +262,134 @@ function scrollActiveEventIntoView(
   overlay: SVGGElement,
   activeEvents: ActiveRenderEvent[]
 ): void {
-  const targetEvent = activeEvents[0]?.event;
-  if (!targetEvent || targetEvent.notes.length === 0) {
+  const targetBox = followTargetBox(activeEvents);
+  const svg = overlay.ownerSVGElement;
+  const horizontalTarget = svg ? findScrollableAncestor(svg, "x") : null;
+  const verticalTarget = svg ? findScrollableAncestor(svg, "y") : null;
+
+  if (!targetBox || !svg || !horizontalTarget || !verticalTarget) {
     return;
   }
 
-  const anchor = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  const anchorBox = targetEvent.box;
+  const svgRect = svg.getBoundingClientRect();
+  const horizontalRect = scrollTargetRect(horizontalTarget);
+  const verticalRect = scrollTargetRect(verticalTarget);
+  const viewBox = svg.viewBox.baseVal;
 
-  anchor.setAttribute("x", String(anchorBox.x));
-  anchor.setAttribute("y", String(anchorBox.y));
-  anchor.setAttribute("width", String(Math.max(1, anchorBox.width)));
-  anchor.setAttribute("height", String(Math.max(1, anchorBox.height)));
-  anchor.setAttribute("fill", "transparent");
-  anchor.setAttribute("aria-hidden", "true");
-  overlay.appendChild(anchor);
-  anchor.scrollIntoView({
-    behavior: "smooth",
-    block: "center",
-    inline: "center"
+  if (svgRect.width <= 0 || svgRect.height <= 0 || viewBox.width <= 0 || viewBox.height <= 0) {
+    return;
+  }
+
+  const targetCenterX =
+    svgRect.left + ((targetBox.x + targetBox.width / 2 - viewBox.x) / viewBox.width) * svgRect.width;
+  const targetCenterY =
+    svgRect.top + ((targetBox.y + targetBox.height / 2 - viewBox.y) / viewBox.height) * svgRect.height;
+
+  const nextLeft =
+    scrollTargetLeft(horizontalTarget) + targetCenterX - horizontalRect.left - horizontalRect.width * 0.5;
+  const nextTop =
+    scrollTargetTop(verticalTarget) + targetCenterY - verticalRect.top - verticalRect.height * 0.42;
+
+  if (horizontalTarget === verticalTarget) {
+    scrollTargetTo(horizontalTarget, nextLeft, nextTop);
+    return;
+  }
+
+  scrollTargetTo(horizontalTarget, nextLeft, scrollTargetTop(horizontalTarget));
+  scrollTargetTo(verticalTarget, scrollTargetLeft(verticalTarget), nextTop);
+}
+
+type ScrollTarget = HTMLElement | Window;
+type ScrollAxis = "x" | "y";
+
+function findScrollableAncestor(start: Element, axis: ScrollAxis): ScrollTarget {
+  let element: HTMLElement | null = start.parentElement;
+
+  while (element) {
+    if (isScrollableElement(element, axis)) {
+      return element;
+    }
+
+    element = element.parentElement;
+  }
+
+  return window;
+}
+
+function isScrollableElement(element: HTMLElement, axis: ScrollAxis): boolean {
+  const style = window.getComputedStyle(element);
+
+  if (axis === "x") {
+    return allowsScrolling(style.overflowX) && element.scrollWidth - element.clientWidth > 1;
+  }
+
+  return allowsScrolling(style.overflowY) && element.scrollHeight - element.clientHeight > 1;
+}
+
+function allowsScrolling(overflow: string): boolean {
+  return overflow === "auto" || overflow === "scroll" || overflow === "overlay";
+}
+
+function scrollTargetRect(target: ScrollTarget): Pick<DOMRect, "left" | "top" | "width" | "height"> {
+  if (target instanceof Window) {
+    return {
+      left: 0,
+      top: 0,
+      width: window.innerWidth,
+      height: window.innerHeight
+    };
+  }
+
+  return target.getBoundingClientRect();
+}
+
+function scrollTargetLeft(target: ScrollTarget): number {
+  return target instanceof Window ? window.scrollX : target.scrollLeft;
+}
+
+function scrollTargetTop(target: ScrollTarget): number {
+  return target instanceof Window ? window.scrollY : target.scrollTop;
+}
+
+function scrollTargetTo(target: ScrollTarget, left: number, top: number): void {
+  target.scrollTo({
+    left,
+    top,
+    behavior: "smooth"
   });
+}
+
+function followTargetBox(activeEvents: ActiveRenderEvent[]): RenderBox | null {
+  const noteEvents = activeEvents
+    .map((activeEvent) => activeEvent.event)
+    .filter((event) => event.notes.length > 0);
+
+  if (!noteEvents.length) {
+    return null;
+  }
+
+  const latestStartTicks = Math.max(...noteEvents.map((event) => event.event.startTicks));
+  const targetEvents = noteEvents.filter((event) => event.event.startTicks === latestStartTicks);
+
+  return unionRenderBoxes(targetEvents.map((event) => event.box));
+}
+
+function unionRenderBoxes(boxes: RenderBox[]): RenderBox | null {
+  if (!boxes.length) {
+    return null;
+  }
+
+  const x1 = Math.min(...boxes.map((box) => box.x));
+  const y1 = Math.min(...boxes.map((box) => box.y));
+  const x2 = Math.max(...boxes.map((box) => box.x + box.width));
+  const y2 = Math.max(...boxes.map((box) => box.y + box.height));
+
+  return {
+    x: x1,
+    y: y1,
+    width: x2 - x1,
+    height: y2 - y1
+  };
 }
 
 function stemMarkup(renderEvent: RenderEvent, rendererMode: NotationRendererMode): string {
