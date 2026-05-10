@@ -119,6 +119,34 @@ The portable artifact is written to `release/`, which is ignored by git.
 - Do not reintroduce playback-position-driven React rerenders for staff
   highlighting; use the existing clock/overlay separation.
 
+## Branch Naming
+
+Use descriptive branch prefixes that communicate the intent of the work. Do not
+put every branch under `codex/`.
+
+Preferred prefixes:
+
+- `feat/<short-description>` for user-visible features or new capabilities.
+- `fix/<short-description>` for bug fixes, regressions, and reliability work.
+- `chore/<short-description>` for tooling, scripts, maintenance, and repository
+  housekeeping that does not change app behavior.
+- `docs/<short-description>` for documentation-only work.
+- `refactor/<short-description>` for internal restructuring without intended
+  behavior changes.
+- `test/<short-description>` for test-only or fixture-only work.
+
+Naming rules:
+
+- Keep the description lowercase kebab-case, for example
+  `feat/musicxml-export`, `fix/playback-seek-pops`, or
+  `chore/musescore-comparison-fixtures`.
+- Prefer the smallest accurate prefix. If a change contains code and docs, use
+  the code-facing prefix such as `feat/` or `fix/`.
+- Reserve `codex/<short-description>` only for disposable local experiments
+  that are not expected to be pushed or kept on GitHub.
+- Before pushing a long-lived branch, rename any temporary `codex/` branch to
+  the appropriate semantic prefix.
+
 ## Frontend Rules
 
 - Match the current quiet desktop-tool style.
