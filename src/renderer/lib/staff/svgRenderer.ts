@@ -45,6 +45,8 @@ export function renderScoreSvgStyle(): string {
     ".tuplet-mark path{stroke-width:1.15}",
     ".tuplet-mark text{fill:#4d5a6b;font-family:Georgia,'Times New Roman',serif;font-size:12px;font-weight:800;text-anchor:middle}",
     ".active-score-overlay{pointer-events:none}",
+    ".playback-cursor-line{stroke:#6f879b;stroke-linecap:round;stroke-width:2.2;opacity:.72;vector-effect:non-scaling-stroke}",
+    ".playback-cursor-handle{fill:#f7fafc;stroke:#6f879b;stroke-width:1.7;opacity:.9;vector-effect:non-scaling-stroke}",
     ".active-score-overlay .note-head{fill:#087c73;stroke:#065f57}",
     ".active-score-overlay .note-stem,.active-score-overlay .beam-line,.active-score-overlay .tie-mark,.active-score-overlay .tuplet-mark path{stroke:#087c73}",
     ".active-score-overlay .tuplet-mark text{fill:#087c73}"

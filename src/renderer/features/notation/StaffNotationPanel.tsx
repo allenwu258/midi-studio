@@ -8,6 +8,7 @@ import {
   type RenderBox,
   type RenderEvent,
   type RenderScore,
+  type RenderSystem,
   type RenderTuplet
 } from "../../lib/staff";
 import { noteheadGlyphMarkup, renderScoreBodyToSvg, renderScoreSvgStyle } from "../../lib/staff/svgRenderer";
@@ -33,6 +34,7 @@ type StaffNotationPanelProps = {
 
 type ActiveRenderEvent = {
   event: RenderEvent;
+  system: RenderSystem;
   beams: RenderBeamGroup[];
   tuplets: RenderTuplet[];
 };
@@ -68,9 +70,10 @@ export function StaffNotationPanel({
 
     function updateOverlay() {
       const startedAt = performance.now();
-      const activePosition = findActiveScorePosition(playbackMap, getPlaybackPosition());
+      const playbackPositionMs = getPlaybackPosition();
+      const activePosition = findActiveScorePosition(playbackMap, playbackPositionMs);
       const activeIds = Array.from(activePosition.activeIds);
-      const signature = [...activeIds].sort().join("|");
+      const signature = `${[...activeIds].sort().join("|")}@${Math.floor(playbackPositionMs / 125)}`;
 
       if (signature === lastOverlaySignatureRef.current) {
         return;
@@ -82,7 +85,7 @@ export function StaffNotationPanel({
       ).filter(isActiveRenderEvent);
       const lookupMs = performance.now() - startedAt;
 
-      renderActiveScoreOverlay(overlayElement, activeEvents, rendererMode);
+      renderActiveScoreOverlay(overlayElement, activeEvents, playbackPositionMs, playbackMap, activeEventIndex, rendererMode);
       if (followPlayback) {
         scrollActiveEventIntoView(overlayElement, activeEvents);
       }
@@ -208,6 +211,7 @@ function buildActiveEventIndex(renderScore: RenderScore): Map<string, ActiveRend
 
           index.set(event.event.id, {
             event,
+            system,
             beams: beamsByEventId.get(event.event.id) ?? [],
             tuplets: tupletsByEventId.get(event.event.id) ?? []
           });
@@ -226,12 +230,19 @@ function isActiveRenderEvent(event: ActiveRenderEvent | undefined): event is Act
 function renderActiveScoreOverlay(
   overlay: SVGGElement,
   activeEvents: ActiveRenderEvent[],
+  playbackPositionMs: number,
+  playbackMap: PlaybackMapEntry[],
+  activeEventIndex: Map<string, ActiveRenderEvent>,
   rendererMode: NotationRendererMode
 ): void {
   const beams = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.beams));
   const tuplets = uniqueById(activeEvents.flatMap((activeEvent) => activeEvent.tuplets));
+  const cursor = playbackCursorMarkup(
+    createPlaybackCursor(playbackPositionMs, playbackMap, activeEventIndex)
+  );
 
   overlay.innerHTML = [
+    cursor,
     ...beams.map((beam) => activeBeamMarkup(beam, rendererMode)),
     ...tuplets.map((tuplet) => activeTupletMarkup(tuplet, rendererMode)),
     ...activeEvents.map((activeEvent) => activeEventMarkup(activeEvent.event, rendererMode))
@@ -258,16 +269,105 @@ function activeEventMarkup(renderEvent: RenderEvent, rendererMode: NotationRende
   return `<g class="active-score-event">${noteHeads}${stem}${tie}</g>`;
 }
 
+function createPlaybackCursor(
+  playbackPositionMs: number,
+  playbackMap: PlaybackMapEntry[],
+  activeEventIndex: Map<string, ActiveRenderEvent>
+): PlaybackCursor | null {
+  const cursorEvent = findCursorEvent(playbackPositionMs, playbackMap, activeEventIndex);
+  if (!cursorEvent) {
+    return null;
+  }
+
+  const x = interpolatedCursorX(cursorEvent, playbackPositionMs, playbackMap, activeEventIndex);
+
+  return {
+    x,
+    y1: cursorEvent.activeEvent.system.y + 10,
+    y2: cursorEvent.activeEvent.system.y + cursorEvent.activeEvent.system.height - 10
+  };
+}
+
+function playbackCursorMarkup(cursor: PlaybackCursor | null): string {
+  if (!cursor) {
+    return "";
+  }
+
+  return [
+    `<g class="playback-cursor">`,
+    `<line class="playback-cursor-line" x1="${cursor.x}" y1="${cursor.y1}" x2="${cursor.x}" y2="${cursor.y2}" />`,
+    `<circle class="playback-cursor-handle" cx="${cursor.x}" cy="${cursor.y1}" r="4.5" />`,
+    `</g>`
+  ].join("");
+}
+
+function interpolatedCursorX(
+  cursorEvent: CursorEvent,
+  playbackPositionMs: number,
+  playbackMap: PlaybackMapEntry[],
+  activeEventIndex: Map<string, ActiveRenderEvent>
+): number {
+  const currentX = cursorEvent.activeEvent.event.box.x + cursorEvent.activeEvent.event.box.width / 2;
+  const currentEntry = cursorEvent.entry;
+
+  if (playbackPositionMs <= currentEntry.startMs) {
+    return currentX;
+  }
+
+  const nextEntry = playbackMap.find(
+    (entry) =>
+      entry.startMs > currentEntry.startMs &&
+      activeEventIndex.get(entry.elementId)?.system === cursorEvent.activeEvent.system
+  );
+  const nextActiveEvent = nextEntry ? activeEventIndex.get(nextEntry.elementId) : undefined;
+
+  if (!nextEntry || !nextActiveEvent || nextEntry.startMs <= currentEntry.startMs) {
+    return currentX;
+  }
+
+  const nextX = nextActiveEvent.event.box.x + nextActiveEvent.event.box.width / 2;
+  const progress = clamp01(
+    (playbackPositionMs - currentEntry.startMs) / (nextEntry.startMs - currentEntry.startMs)
+  );
+
+  return currentX + (nextX - currentX) * progress;
+}
+
+function findCursorEvent(
+  playbackPositionMs: number,
+  playbackMap: PlaybackMapEntry[],
+  activeEventIndex: Map<string, ActiveRenderEvent>
+): CursorEvent | null {
+  for (let index = playbackMap.length - 1; index >= 0; index -= 1) {
+    const entry = playbackMap[index];
+    if (entry.startMs > playbackPositionMs) {
+      continue;
+    }
+
+    const activeEvent = activeEventIndex.get(entry.elementId);
+    if (activeEvent) {
+      return { entry, activeEvent };
+    }
+  }
+
+  const firstEntry = playbackMap.find((entry) => activeEventIndex.has(entry.elementId));
+  const firstActiveEvent = firstEntry ? activeEventIndex.get(firstEntry.elementId) : undefined;
+
+  return firstEntry && firstActiveEvent
+    ? { entry: firstEntry, activeEvent: firstActiveEvent }
+    : null;
+}
+
 function scrollActiveEventIntoView(
   overlay: SVGGElement,
   activeEvents: ActiveRenderEvent[]
 ): void {
-  const targetBox = followTargetBox(activeEvents);
+  const target = followTarget(activeEvents);
   const svg = overlay.ownerSVGElement;
   const horizontalTarget = svg ? findScrollableAncestor(svg, "x") : null;
   const verticalTarget = svg ? findScrollableAncestor(svg, "y") : null;
 
-  if (!targetBox || !svg || !horizontalTarget || !verticalTarget) {
+  if (!target || !svg || !horizontalTarget || !verticalTarget) {
     return;
   }
 
@@ -281,26 +381,66 @@ function scrollActiveEventIntoView(
   }
 
   const targetCenterX =
-    svgRect.left + ((targetBox.x + targetBox.width / 2 - viewBox.x) / viewBox.width) * svgRect.width;
-  const targetCenterY =
-    svgRect.top + ((targetBox.y + targetBox.height / 2 - viewBox.y) / viewBox.height) * svgRect.height;
+    svgRect.left + ((target.eventBox.x + target.eventBox.width / 2 - viewBox.x) / viewBox.width) * svgRect.width;
+  const systemCenterY =
+    svgRect.top + ((target.system.y + target.system.height / 2 - viewBox.y) / viewBox.height) * svgRect.height;
 
-  const nextLeft =
-    scrollTargetLeft(horizontalTarget) + targetCenterX - horizontalRect.left - horizontalRect.width * 0.5;
-  const nextTop =
-    scrollTargetTop(verticalTarget) + targetCenterY - verticalRect.top - verticalRect.height * 0.42;
+  const nextLeft = nextScrollPositionForComfortZone({
+    current: scrollTargetLeft(horizontalTarget),
+    targetPosition: targetCenterX,
+    viewportStart: horizontalRect.left,
+    viewportSize: horizontalRect.width,
+    minRatio: 0.28,
+    maxRatio: 0.72,
+    preferredRatio: 0.5
+  });
+  const nextTop = nextScrollPositionForComfortZone({
+    current: scrollTargetTop(verticalTarget),
+    targetPosition: systemCenterY,
+    viewportStart: verticalRect.top,
+    viewportSize: verticalRect.height,
+    minRatio: 0.3,
+    maxRatio: 0.62,
+    preferredRatio: 0.42
+  });
 
-  if (horizontalTarget === verticalTarget) {
-    scrollTargetTo(horizontalTarget, nextLeft, nextTop);
+  if (nextLeft === null && nextTop === null) {
     return;
   }
 
-  scrollTargetTo(horizontalTarget, nextLeft, scrollTargetTop(horizontalTarget));
-  scrollTargetTo(verticalTarget, scrollTargetLeft(verticalTarget), nextTop);
+  if (horizontalTarget === verticalTarget) {
+    scrollTargetTo(
+      horizontalTarget,
+      nextLeft ?? scrollTargetLeft(horizontalTarget),
+      nextTop ?? scrollTargetTop(horizontalTarget)
+    );
+    return;
+  }
+
+  if (nextLeft !== null) {
+    scrollTargetTo(horizontalTarget, nextLeft, scrollTargetTop(horizontalTarget));
+  }
+  if (nextTop !== null) {
+    scrollTargetTo(verticalTarget, scrollTargetLeft(verticalTarget), nextTop);
+  }
 }
 
 type ScrollTarget = HTMLElement | Window;
 type ScrollAxis = "x" | "y";
+type FollowTarget = {
+  eventId: string;
+  eventBox: RenderBox;
+  system: Pick<RenderSystem, "y" | "height">;
+};
+type PlaybackCursor = {
+  x: number;
+  y1: number;
+  y2: number;
+};
+type CursorEvent = {
+  entry: PlaybackMapEntry;
+  activeEvent: ActiveRenderEvent;
+};
 
 function findScrollableAncestor(start: Element, axis: ScrollAxis): ScrollTarget {
   let element: HTMLElement | null = start.parentElement;
@@ -359,19 +499,60 @@ function scrollTargetTo(target: ScrollTarget, left: number, top: number): void {
   });
 }
 
-function followTargetBox(activeEvents: ActiveRenderEvent[]): RenderBox | null {
+function nextScrollPositionForComfortZone({
+  current,
+  targetPosition,
+  viewportStart,
+  viewportSize,
+  minRatio,
+  maxRatio,
+  preferredRatio
+}: {
+  current: number;
+  targetPosition: number;
+  viewportStart: number;
+  viewportSize: number;
+  minRatio: number;
+  maxRatio: number;
+  preferredRatio: number;
+}): number | null {
+  const comfortStart = viewportStart + viewportSize * minRatio;
+  const comfortEnd = viewportStart + viewportSize * maxRatio;
+
+  if (targetPosition >= comfortStart && targetPosition <= comfortEnd) {
+    return null;
+  }
+
+  return current + targetPosition - viewportStart - viewportSize * preferredRatio;
+}
+
+function followTarget(activeEvents: ActiveRenderEvent[]): FollowTarget | null {
   const noteEvents = activeEvents
-    .map((activeEvent) => activeEvent.event)
-    .filter((event) => event.notes.length > 0);
+    .filter((activeEvent) => activeEvent.event.notes.length > 0);
 
   if (!noteEvents.length) {
     return null;
   }
 
-  const latestStartTicks = Math.max(...noteEvents.map((event) => event.event.startTicks));
-  const targetEvents = noteEvents.filter((event) => event.event.startTicks === latestStartTicks);
+  const latestStartTicks = Math.max(...noteEvents.map((activeEvent) => activeEvent.event.event.startTicks));
+  const targetEvents = noteEvents.filter(
+    (activeEvent) => activeEvent.event.event.startTicks === latestStartTicks
+  );
+  const eventBox = unionRenderBoxes(targetEvents.map((activeEvent) => activeEvent.event.box));
 
-  return unionRenderBoxes(targetEvents.map((event) => event.box));
+  if (!eventBox) {
+    return null;
+  }
+
+  return {
+    eventId: targetEvents[0].event.event.id,
+    eventBox,
+    system: targetEvents[0].system
+  };
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 function unionRenderBoxes(boxes: RenderBox[]): RenderBox | null {

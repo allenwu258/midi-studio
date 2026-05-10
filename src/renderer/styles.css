@@ -390,6 +390,22 @@ h3 {
   pointer-events: none;
 }
 
+.playback-cursor-line {
+  stroke: #6f879b;
+  stroke-linecap: round;
+  stroke-width: 2.2;
+  opacity: 0.72;
+  vector-effect: non-scaling-stroke;
+}
+
+.playback-cursor-handle {
+  fill: #f7fafc;
+  stroke: #6f879b;
+  stroke-width: 1.7;
+  opacity: 0.9;
+  vector-effect: non-scaling-stroke;
+}
+
 .active-score-overlay .note-head {
   fill: #087c73;
   stroke: #065f57;
