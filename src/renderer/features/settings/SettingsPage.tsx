@@ -61,16 +61,16 @@ export function SettingsPage({
         </div>
         <div className="segmented-control" aria-label="谱面渲染">
           <ModeButton
-            active={settings.notationRendererMode === "engraved"}
-            disabled={isSaving}
-            label="Engraved SVG"
-            onClick={() => onUpdate({ notationRendererMode: "engraved" })}
-          />
-          <ModeButton
             active={settings.notationRendererMode === "classic"}
             disabled={isSaving}
             label="Classic JSX"
             onClick={() => onUpdate({ notationRendererMode: "classic" })}
+          />
+          <ModeButton
+            active={settings.notationRendererMode === "engraved"}
+            disabled={isSaving}
+            label="Engraved SVG"
+            onClick={() => onUpdate({ notationRendererMode: "engraved" })}
           />
         </div>
       </section>
