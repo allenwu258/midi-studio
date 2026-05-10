@@ -872,6 +872,9 @@ renderer mode 选择匹配的 notehead、stem、beam、tie 尺寸。
 - `findActiveScorePosition()` 查询 active ids。
 - 若 active id signature 未变化，则跳过 DOM 更新。
 - 若变化，则更新 overlay `innerHTML`。
+- 如果 transport 上的跟随播放处于开启状态，则把当前 active score event 滚动到视口内；
+  目标按 `startTicks` 聚合同一谱面时刻的多 voice / 多 staff 事件，横向和纵向分别查找
+  实际可滚动祖先容器。
 - overlay metrics 写入 ref，最多 1s 聚合进入 React diagnostics。
 
 收益：
@@ -902,7 +905,6 @@ src/shared/settings.ts
   `Classic JSX`。
 - `defaultSpeedPercent`。
 - `masterVolumePercent`。
-- `followPlayback`。
 
 重要约束：
 
@@ -924,6 +926,18 @@ src/shared/settings.ts
   `--transport-lock-offset`，由 CSS 计算底部 padding，避免换行、缩放或窄屏时遮挡谱面。
 - 图钉按钮使用 `aria-pressed` 和 `aria-label` 表达状态；视觉上锁定为竖直 pin，未锁定为
   斜放 pin + slash，不只依赖颜色区分。
+
+### 9.2 跟随播放状态
+
+跟随播放状态也是 renderer 内的 UI-local state：
+
+- 默认开启，由底部 transport 上的跟随按钮切换。
+- 该状态不写入 SQLite，不属于 `UserSettings`，也不再出现在设置页。
+- 关闭后只停止自动滚动，播放高亮 overlay 仍继续更新。
+- 自动滚动由 `StaffNotationPanel` 在 overlay active id 变化时触发；目标框来自当前 active
+  events 中最新 `startTicks` 的事件 union，避免同一谱面位置的多 voice / 双谱表被拆成
+  多个滚动目标。
+- 横向和纵向 scroll target 分别查找，避免最近祖先只支持单轴滚动时另一轴定位失效。
 
 ## 10. 诊断系统
 
@@ -1236,6 +1250,7 @@ Player internal clock
   -> findActiveScorePosition()
   -> compare active id signature
   -> update overlay DOM only when changed
+  -> if follow playback is enabled, scroll active event box into view
   -> aggregate overlay metrics every ~1s
 ```
 
@@ -1243,6 +1258,7 @@ Player internal clock
 
 - 音频 clock 不进入 React 高频 state。
 - 静态谱面不因 position 改变重绘。
+- 跟随滚动只在 active id signature 变化时触发，避免播放期间持续写 scroll position。
 - 高亮可以低频或略有延迟，但不能反向影响播放质量。
 
 ## 18. 线程模型与数据边界

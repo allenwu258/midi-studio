@@ -21,7 +21,8 @@ Chinese README: [README.md](README.md)
 - Pure Web Audio synth fallback.
 - Playback controls: play, pause, stop, seek, speed, and master volume.
 - The bottom transport bar is locked to the window bottom by default and can be
-  unlocked back into the page flow.
+  unlocked back into the page flow; the follow-playback control also lives in
+  the transport, defaults on, and is not persisted to SQLite.
 - Persistent settings backed by SQLite.
   - Playback mode can switch between `SF2 Synth` and `Basic MIDI`.
   - Notation rendering can switch between `Engraved SVG` and `Classic JSX`.
@@ -50,7 +51,9 @@ Chinese README: [README.md](README.md)
     renderer and SVG export;
   - SVG staff systems, clefs, measures, notes, rests, ties, beams, tuplets;
   - time-slice spacing, glyph boxes, and baseline collision avoidance;
-  - imperative playback overlay to avoid React rerender pressure.
+  - imperative playback overlay to avoid React rerender pressure;
+  - follow-playback scrolling targets the current active score event by tick
+    position and resolves horizontal/vertical scroll containers independently.
 - Playback reliability diagnostics:
   - output mode and fallback reason;
   - alphaSynth load timings;
@@ -154,6 +157,9 @@ midi-studio/
   imperative overlay and throttled diagnostics.
 - The bottom transport can be locked as a fixed toolbar; the renderer reserves
   bottom space from the measured toolbar height to avoid covering notation.
+- Follow playback is a session-local transport control. It defaults on, does
+  not belong to SQLite settings, and disabling it stops auto-scroll while
+  keeping score highlighting active.
 
 For the complete architecture and technical implementation details, see:
 

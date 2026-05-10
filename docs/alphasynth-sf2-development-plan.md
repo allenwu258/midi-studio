@@ -162,9 +162,9 @@ export type PlaybackEngineMode = "basic-midi" | "sf2-synth";
 
 export type UserSettings = {
   playbackEngineMode: PlaybackEngineMode;
+  notationRendererMode: NotationRendererMode;
   defaultSpeedPercent: number;
   masterVolumePercent: number;
-  followPlayback: boolean;
 };
 ```
 
@@ -173,9 +173,9 @@ export type UserSettings = {
 ```ts
 const DEFAULT_SETTINGS: UserSettings = {
   playbackEngineMode: "sf2-synth",
+  notationRendererMode: "engraved",
   defaultSpeedPercent: 100,
-  masterVolumePercent: 100,
-  followPlayback: true
+  masterVolumePercent: 100
 };
 ```
 
@@ -184,6 +184,7 @@ const DEFAULT_SETTINGS: UserSettings = {
 - `playbackEngineMode` 是本阶段最关键设置。
 - `sf2-synth` 作为默认值，优先使用真实 SoundFont 音色。
 - 如果 alphaSynth 或 SF2 加载失败，UI 可以提示用户切换到 `basic-midi`，也可以提供一次性 fallback，但不自动改写用户设置。
+- `followPlayback` 已从持久化设置中移除，当前是底部播放栏上的会话级 UI 状态，默认开启。
 
 ### 6.2 设置页面
 

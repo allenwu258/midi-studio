@@ -83,6 +83,7 @@ bottom transport, locked by default
 - 拖动底部进度条时，五线谱定位同步到对应小节/音符。
 - 点击乐谱上的音符、和弦或小节区域，可以 seek 到对应播放位置。
 - 底部播放栏默认固定在窗口底部，用户可通过图钉按钮取消锁定并恢复为页面底部栏。
+- 跟随播放按钮位于底部播放栏，默认开启；关闭后停止自动滚动但保持播放高亮。
 
 第一版不追求专业排版软件质量，但必须做到：
 
@@ -496,13 +497,16 @@ StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 3. Staff SVG 元素绑定 `data-score-element-id`。
 4. App 暴露 playback clock getter，StaffNotationPanel 使用 overlay 低频读取，避免播放位置驱动 React 高频 rerender。
 5. StaffNotationPanel 将 click 转换为 `onSeek(ms)`。
-6. 实现 auto-scroll，跟随设置中的 follow playback。
+6. 实现 auto-scroll，由底部播放栏的会话级 follow playback 按钮控制，不写入持久化设置。
+7. 自动滚动按当前 active event 的 `startTicks` 聚合同一谱面时刻的事件，并分别解析横向/
+   纵向可滚动容器，避免多声部和双谱表播放时跳动。
 
 验收：
 
 - 播放时当前 note/chord 高亮。
 - 拖动进度条后高亮跳到对应小节。
 - 点击音符后播放器 seek 到该位置。
+- 开启跟随时谱面滚动到当前播放位置；关闭跟随后高亮仍更新但谱面不再自动滚动。
 
 ### Phase 5: 多轨、多谱表与基础钢琴（基础实现已完成）
 
