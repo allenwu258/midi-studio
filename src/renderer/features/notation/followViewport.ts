@@ -42,6 +42,13 @@ export function markManualScrollPause(state: FollowViewportState, nowMs: number)
   };
 }
 
+export function resumeAutoFollow(state: FollowViewportState): FollowViewportState {
+  return {
+    ...state,
+    manualScrollPausedUntilMs: 0
+  };
+}
+
 export function followPlaybackViewport({
   activeEvents,
   cursor,
@@ -49,7 +56,17 @@ export function followPlaybackViewport({
   nowMs,
   state
 }: FollowViewportRequest): FollowViewportResult {
-  const target = followTarget(activeEvents);
+  const target = cursor
+    ? {
+        eventBox: {
+          x: cursor.x,
+          y: cursor.y1,
+          width: 0,
+          height: cursor.y2 - cursor.y1
+        },
+        system: cursor.system
+      }
+    : followTarget(activeEvents);
   const svg = overlay.ownerSVGElement;
   const horizontalTarget = svg ? findScrollableAncestor(svg, "x") : null;
   const verticalTarget = svg ? findScrollableAncestor(svg, "y") : null;

@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef } from "react";
 import type { NotationRendererMode } from "../../../shared/settings";
 import type { ScoreDraft } from "../../lib/score";
 import type { RenderScore } from "../../lib/staff";
@@ -17,6 +17,7 @@ import {
   createFollowViewportState,
   followPlaybackViewport,
   markManualScrollPause,
+  resumeAutoFollow,
   type FollowViewportState
 } from "./followViewport";
 import { renderActiveScoreOverlay } from "./overlayMarkup";
@@ -56,6 +57,12 @@ export function StaffNotationPanel({
     () => (renderScore ? buildActiveEventIndex(renderScore) : new Map<string, ActiveRenderEvent>()),
     [renderScore]
   );
+  const pauseAutoFollowForManualScroll = useCallback(() => {
+    followViewportStateRef.current = markManualScrollPause(
+      followViewportStateRef.current,
+      performance.now()
+    );
+  }, []);
 
   useEffect(() => {
     const overlay = activeOverlayRef.current;
@@ -118,21 +125,12 @@ export function StaffNotationPanel({
       return undefined;
     }
 
-    notationPanel.addEventListener("pointerdown", pauseAutoFollowForManualScroll, { passive: true });
     notationPanel.addEventListener("wheel", pauseAutoFollowForManualScroll, { passive: true });
 
     return () => {
-      notationPanel.removeEventListener("pointerdown", pauseAutoFollowForManualScroll);
       notationPanel.removeEventListener("wheel", pauseAutoFollowForManualScroll);
     };
-  });
-
-  function pauseAutoFollowForManualScroll() {
-    followViewportStateRef.current = markManualScrollPause(
-      followViewportStateRef.current,
-      performance.now()
-    );
-  }
+  }, [pauseAutoFollowForManualScroll]);
 
   if (renderError) {
     return (
@@ -172,6 +170,7 @@ export function StaffNotationPanel({
 
     const seekPosition = findSeekPositionForElement(playbackMap, elementId);
     if (seekPosition !== null) {
+      followViewportStateRef.current = resumeAutoFollow(followViewportStateRef.current);
       onSeek(seekPosition);
     }
   }
