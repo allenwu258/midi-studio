@@ -437,6 +437,24 @@ h3 {
   background: #ffffff;
 }
 
+.transport .button.primary {
+  background: #52677a;
+  color: #ffffff;
+}
+
+.transport .button.primary:hover:not(:disabled) {
+  background: #465a6c;
+}
+
+.transport .button.secondary {
+  background: #e8edf2;
+  color: #4b5b6d;
+}
+
+.transport .button.secondary:hover:not(:disabled) {
+  background: #dde5ed;
+}
+
 .app-shell.transport-locked {
   padding-bottom: calc(var(--transport-lock-offset) + 32px);
 }
@@ -497,7 +515,7 @@ h3 {
   text-align: right;
 }
 
-button.button.secondary.transport-lock-button {
+button.button.secondary.transport-icon-button {
   flex: 0 0 38px;
   width: 38px;
   min-width: 38px;
@@ -508,13 +526,35 @@ button.button.secondary.transport-lock-button {
   line-height: 1;
 }
 
-button.button.secondary.transport-lock-button[aria-pressed="true"] {
-  color: #087c73;
-  background: #dcefeb;
+button.button.secondary.transport-icon-button[aria-pressed="true"] {
+  color: #2f716d;
+  background: #dce8e6;
 }
 
-button.button.secondary.transport-lock-button[aria-pressed="true"]:hover:not(:disabled) {
-  background: #cfe8e3;
+button.button.secondary.transport-icon-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: #cfddda;
+}
+
+.transport-follow-icon {
+  width: 19px;
+  height: 19px;
+  display: block;
+}
+
+.transport-follow-ring,
+.transport-follow-axis {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-width: 1.7;
+}
+
+.transport-follow-axis {
+  opacity: 0.78;
+}
+
+.transport-follow-dot {
+  fill: currentColor;
 }
 
 .transport-lock-icon {
@@ -681,20 +721,6 @@ button.button.secondary.transport-lock-button[aria-pressed="true"]:hover:not(:di
   text-align: right;
 }
 
-.toggle-control {
-  display: inline-flex;
-  align-items: center;
-  justify-self: flex-start;
-  gap: 10px;
-  color: #263544;
-  font-weight: 700;
-}
-
-.toggle-control input {
-  width: 18px;
-  height: 18px;
-}
-
 .storage-section {
   align-items: start;
 }
@@ -784,7 +810,7 @@ button.button.secondary.transport-lock-button[aria-pressed="true"]:hover:not(:di
     bottom: 12px;
   }
 
-  button.button.secondary.transport-lock-button {
+  button.button.secondary.transport-icon-button {
     width: 38px;
   }
 }

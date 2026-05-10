@@ -124,6 +124,7 @@ export function App() {
   const [error, setError] = useState("");
   const [view, setView] = useState<AppView>("player");
   const [isTransportLocked, setIsTransportLocked] = useState(true);
+  const [isFollowingPlayback, setIsFollowingPlayback] = useState(true);
   const [settings, setSettings] = useState<UserSettings>(DEFAULT_SETTINGS);
   const [storageInfo, setStorageInfo] = useState<SettingsStorageInfo | null>(null);
   const [settingsError, setSettingsError] = useState("");
@@ -752,6 +753,7 @@ export function App() {
               {song ? (
                 <StaffNotationPanel
                   isRendering={scoreRenderState.status === "rendering"}
+                  followPlayback={isFollowingPlayback}
                   rendererMode={settings.notationRendererMode}
                   getPlaybackPosition={getPlaybackPosition}
                   playbackMap={scoreRenderState.playbackMap}
@@ -810,7 +812,17 @@ export function App() {
                 <strong>{speed}%</strong>
               </label>
               <button
-                className="button secondary transport-lock-button"
+                className="button secondary transport-icon-button transport-follow-button"
+                type="button"
+                onClick={() => setIsFollowingPlayback((current) => !current)}
+                aria-pressed={isFollowingPlayback}
+                aria-label={isFollowingPlayback ? "取消跟随播放" : "跟随播放"}
+                title={isFollowingPlayback ? "取消跟随播放" : "跟随播放"}
+              >
+                <FollowPlaybackIcon active={isFollowingPlayback} />
+              </button>
+              <button
+                className="button secondary transport-icon-button transport-lock-button"
                 type="button"
                 onClick={() => setIsTransportLocked((current) => !current)}
                 aria-pressed={isTransportLocked}
@@ -948,6 +960,21 @@ function TransportPinIcon({ locked }: { locked: boolean }) {
       {locked ? null : (
         <path className="transport-lock-icon-slash" d="M5.2 18.8 18.8 5.2" />
       )}
+    </svg>
+  );
+}
+
+function FollowPlaybackIcon({ active }: { active: boolean }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className="transport-follow-icon"
+      viewBox="0 0 24 24"
+      focusable="false"
+    >
+      <circle className="transport-follow-ring" cx="12" cy="12" r="6.4" />
+      <path className="transport-follow-axis" d="M12 3.8v3.1M12 17.1v3.1M3.8 12h3.1M17.1 12h3.1" />
+      <circle className="transport-follow-dot" cx="12" cy="12" r={active ? 2.4 : 1.8} />
     </svg>
   );
 }

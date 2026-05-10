@@ -117,22 +117,6 @@ export function SettingsPage({
         </label>
       </section>
 
-      <section className="settings-section">
-        <div className="settings-copy">
-          <h3>跟随播放</h3>
-          <p>播放时自动让谱面跟随当前进度。</p>
-        </div>
-        <label className="toggle-control">
-          <input
-            type="checkbox"
-            checked={settings.followPlayback}
-            disabled={isSaving}
-            onChange={(event) => onUpdate({ followPlayback: event.currentTarget.checked })}
-          />
-          <span>{settings.followPlayback ? "开启" : "关闭"}</span>
-        </label>
-      </section>
-
       <section className="settings-section storage-section">
         <div className="settings-copy">
           <h3>数据存储</h3>

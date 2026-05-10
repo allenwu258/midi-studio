@@ -6,7 +6,6 @@ export type UserSettings = {
   notationRendererMode: NotationRendererMode;
   defaultSpeedPercent: number;
   masterVolumePercent: number;
-  followPlayback: boolean;
 };
 
 export type SettingsStorageInfo = {
@@ -18,8 +17,7 @@ export const DEFAULT_SETTINGS: UserSettings = {
   playbackEngineMode: "sf2-synth",
   notationRendererMode: "engraved",
   defaultSpeedPercent: 100,
-  masterVolumePercent: 100,
-  followPlayback: true
+  masterVolumePercent: 100
 };
 
 export function normalizeSettings(input: Partial<UserSettings> | null | undefined): UserSettings {
@@ -31,8 +29,7 @@ export function normalizeSettings(input: Partial<UserSettings> | null | undefine
     notationRendererMode:
       settings.notationRendererMode === "classic" ? "classic" : "engraved",
     defaultSpeedPercent: clampPercent(settings.defaultSpeedPercent, 50, 150, 100),
-    masterVolumePercent: clampPercent(settings.masterVolumePercent, 0, 100, 100),
-    followPlayback: Boolean(settings.followPlayback)
+    masterVolumePercent: clampPercent(settings.masterVolumePercent, 0, 100, 100)
   };
 }
 

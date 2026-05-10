@@ -19,6 +19,7 @@ import { LegacyScoreSvg } from "./LegacyScoreSvg";
 
 type StaffNotationPanelProps = {
   isRendering: boolean;
+  followPlayback: boolean;
   rendererMode: NotationRendererMode;
   playbackMap: PlaybackMapEntry[];
   renderError: string;
@@ -37,6 +38,7 @@ type ActiveRenderEvent = {
 
 export function StaffNotationPanel({
   isRendering,
+  followPlayback,
   rendererMode,
   playbackMap,
   renderError,
@@ -66,8 +68,8 @@ export function StaffNotationPanel({
     function updateOverlay() {
       const startedAt = performance.now();
       const activePosition = findActiveScorePosition(playbackMap, getPlaybackPosition());
-      const activeIds = Array.from(activePosition.activeIds).sort();
-      const signature = activeIds.join("|");
+      const activeIds = Array.from(activePosition.activeIds);
+      const signature = [...activeIds].sort().join("|");
 
       if (signature === lastOverlaySignatureRef.current) {
         return;
@@ -80,6 +82,9 @@ export function StaffNotationPanel({
       const lookupMs = performance.now() - startedAt;
 
       renderActiveScoreOverlay(overlayElement, activeEvents, rendererMode);
+      if (followPlayback) {
+        scrollActiveEventIntoView(overlayElement, activeEvents);
+      }
       onPlaybackMetrics?.({
         lookupMs,
         activeEventCount: activeEvents.length
@@ -90,7 +95,7 @@ export function StaffNotationPanel({
     const intervalId = window.setInterval(updateOverlay, 125);
 
     return () => window.clearInterval(intervalId);
-  }, [activeEventIndex, getPlaybackPosition, onPlaybackMetrics, playbackMap, renderScore, rendererMode]);
+  }, [activeEventIndex, followPlayback, getPlaybackPosition, onPlaybackMetrics, playbackMap, renderScore, rendererMode]);
 
   if (renderError) {
     return (
@@ -250,6 +255,32 @@ function activeEventMarkup(renderEvent: RenderEvent, rendererMode: NotationRende
   const tie = renderEvent.event.tieStart ? tieMarkup(renderEvent, rendererMode) : "";
 
   return `<g class="active-score-event">${noteHeads}${stem}${tie}</g>`;
+}
+
+function scrollActiveEventIntoView(
+  overlay: SVGGElement,
+  activeEvents: ActiveRenderEvent[]
+): void {
+  const targetEvent = activeEvents[0]?.event;
+  if (!targetEvent || targetEvent.notes.length === 0) {
+    return;
+  }
+
+  const anchor = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  const anchorBox = targetEvent.box;
+
+  anchor.setAttribute("x", String(anchorBox.x));
+  anchor.setAttribute("y", String(anchorBox.y));
+  anchor.setAttribute("width", String(Math.max(1, anchorBox.width)));
+  anchor.setAttribute("height", String(Math.max(1, anchorBox.height)));
+  anchor.setAttribute("fill", "transparent");
+  anchor.setAttribute("aria-hidden", "true");
+  overlay.appendChild(anchor);
+  anchor.scrollIntoView({
+    behavior: "smooth",
+    block: "center",
+    inline: "center"
+  });
 }
 
 function stemMarkup(renderEvent: RenderEvent, rendererMode: NotationRendererMode): string {
