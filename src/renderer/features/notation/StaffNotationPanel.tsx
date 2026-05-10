@@ -24,6 +24,8 @@ import { renderActiveScoreOverlay } from "./overlayMarkup";
 import { createPlaybackCursor } from "./playbackCursor";
 import { LegacyScoreSvg } from "./LegacyScoreSvg";
 
+const SCORE_CLICK_SEEK_LEAD_IN_MS = 30;
+
 type StaffNotationPanelProps = {
   isRendering: boolean;
   followPlayback: boolean;
@@ -171,7 +173,7 @@ export function StaffNotationPanel({
     const seekPosition = findSeekPositionForElement(playbackMap, elementId);
     if (seekPosition !== null) {
       followViewportStateRef.current = resumeAutoFollow(followViewportStateRef.current);
-      onSeek(seekPosition);
+      onSeek(Math.max(0, seekPosition - SCORE_CLICK_SEEK_LEAD_IN_MS));
     }
   }
 

@@ -15,9 +15,13 @@ type ScheduledVoice = {
   disconnected: boolean;
 };
 
-const SEEK_FADE_OUT_MS = 18;
-const SEEK_FADE_IN_MS = 36;
-const VOICE_RELEASE_MS = 35;
+const SEEK_FADE_OUT_MS = 60;
+const SEEK_FADE_IN_MS = 90;
+const SEEK_REPOSITION_DELAY_MS = 70;
+const VOICE_RELEASE_MS = 55;
+const SEEK_SETTLE_MS = VOICE_RELEASE_MS;
+const TRANSPORT_FADE_IN_MS = 35;
+const TRANSPORT_FADE_OUT_MS = 45;
 const MIN_GAIN = 0.0001;
 
 export class SynthPlayer implements MidiPlaybackEngine {
@@ -35,8 +39,10 @@ export class SynthPlayer implements MidiPlaybackEngine {
   private schedulerId = 0;
   private seekTimerId = 0;
   private seekTransitionId = 0;
+  private transportTransitionId = 0;
   private pendingSeekPositionMs: number | null = null;
   private activeSeekTransitionId: number | null = null;
+  private activeTransportTransitionId: number | null = null;
   private lastSeekRequestedAt: number | null = null;
   private scheduledVoices = new Set<ScheduledVoice>();
   private releasingVoices = new Set<ScheduledVoice>();
@@ -77,11 +83,18 @@ export class SynthPlayer implements MidiPlaybackEngine {
       this.positionMs = 0;
     }
 
+    const transportTransitionId = this.beginTransportTransition();
+    this.prepareMasterGainForStart();
+    this.stopVoicesImmediately();
     this.status = "playing";
     this.playStartedAt = context.currentTime;
     this.playStartedPosition = this.positionMs;
     this.nextNoteIndex = this.findNextNoteIndex(this.positionMs);
     this.startScheduler();
+    this.rampMasterGainTo(this.masterVolume, TRANSPORT_FADE_IN_MS);
+    window.setTimeout(() => {
+      this.finishTransportTransition(transportTransitionId, true);
+    }, TRANSPORT_FADE_IN_MS);
     this.emit();
   }
 
@@ -94,17 +107,27 @@ export class SynthPlayer implements MidiPlaybackEngine {
     this.positionMs = this.getPositionMs();
     this.status = "paused";
     this.stopScheduler();
-    this.releaseVoices(VOICE_RELEASE_MS);
+    const transportTransitionId = this.beginTransportTransition();
+    this.rampMasterGainTo(MIN_GAIN, TRANSPORT_FADE_OUT_MS);
+    this.releaseVoices(Math.max(VOICE_RELEASE_MS, TRANSPORT_FADE_OUT_MS));
+    window.setTimeout(() => {
+      this.finishTransportTransition(transportTransitionId, false);
+    }, Math.max(VOICE_RELEASE_MS, TRANSPORT_FADE_OUT_MS));
     this.emit();
   }
 
   stop(): void {
     this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
     this.stopScheduler();
-    this.releaseVoices(VOICE_RELEASE_MS);
+    const transportTransitionId = this.beginTransportTransition();
+    this.rampMasterGainTo(MIN_GAIN, TRANSPORT_FADE_OUT_MS);
+    this.releaseVoices(Math.max(VOICE_RELEASE_MS, TRANSPORT_FADE_OUT_MS));
     this.positionMs = 0;
     this.status = "idle";
     this.nextNoteIndex = 0;
+    window.setTimeout(() => {
+      this.finishTransportTransition(transportTransitionId, false);
+    }, Math.max(VOICE_RELEASE_MS, TRANSPORT_FADE_OUT_MS));
     this.emit();
   }
 
@@ -157,7 +180,8 @@ export class SynthPlayer implements MidiPlaybackEngine {
     if (
       this.pendingSeekPositionMs !== null ||
       this.seekTimerId ||
-      this.activeSeekTransitionId !== null
+      this.activeSeekTransitionId !== null ||
+      this.activeTransportTransitionId !== null
     ) {
       return;
     }
@@ -272,17 +296,32 @@ export class SynthPlayer implements MidiPlaybackEngine {
         }
 
         this.applySeekPosition(positionMs, wasPlaying);
-        this.rampMasterGainTo(this.masterVolume, SEEK_FADE_IN_MS);
+
         window.setTimeout(() => {
-          if (this.activeSeekTransitionId === transitionId) {
-            this.activeSeekTransitionId = null;
-            this.applyMasterGainTarget();
-            if (diagnostic) {
-              this.recordSeekCommit(performance.now() - startedAt);
-            }
+          if (transitionId !== this.seekTransitionId) {
+            return;
           }
-        }, SEEK_FADE_IN_MS);
-      }, SEEK_FADE_OUT_MS);
+
+          if (this.status !== "playing") {
+            this.abortActiveSeekTransition(transitionId, {
+              restoreVolume: true,
+              countDropped: diagnostic
+            });
+            return;
+          }
+
+          this.rampMasterGainTo(this.masterVolume, SEEK_FADE_IN_MS);
+          window.setTimeout(() => {
+            if (this.activeSeekTransitionId === transitionId) {
+              this.activeSeekTransitionId = null;
+              this.applyMasterGainTarget();
+              if (diagnostic) {
+                this.recordSeekCommit(performance.now() - startedAt);
+              }
+            }
+          }, SEEK_FADE_IN_MS);
+        }, SEEK_SETTLE_MS);
+      }, SEEK_REPOSITION_DELAY_MS);
       return;
     }
 
@@ -367,24 +406,28 @@ export class SynthPlayer implements MidiPlaybackEngine {
     const audibleStartMs = Math.max(positionMs, note.startMs);
     const remainingMs = Math.max(0, note.endMs - audibleStartMs);
     const startAt = context.currentTime + startDelayMs / 1000 / this.speed;
-    const durationSeconds = Math.max(0.03, remainingMs / 1000 / this.speed);
+    const durationSeconds = Math.max(0.06, remainingMs / 1000 / this.speed);
     const endAt = startAt + durationSeconds;
     const oscillator = context.createOscillator();
     const gain = context.createGain();
     const voice = { oscillator, gain, startAt, disconnected: false };
     const velocity = Math.max(0.08, Math.min(note.velocity || 0.6, 1));
+    const attackSeconds = Math.min(0.018, Math.max(0.008, durationSeconds * 0.2));
+    const releaseSeconds = Math.min(0.09, Math.max(0.045, durationSeconds * 0.35));
+    const decayStartAt = startAt + attackSeconds;
+    const releaseStartAt = Math.max(decayStartAt + 0.008, endAt - releaseSeconds);
 
     oscillator.type = "triangle";
     oscillator.frequency.setValueAtTime(midiToFrequency(note.midi), startAt);
-    gain.gain.setValueAtTime(0.0001, startAt);
-    gain.gain.exponentialRampToValueAtTime(0.18 * velocity, startAt + 0.012);
-    gain.gain.exponentialRampToValueAtTime(0.08 * velocity, Math.max(startAt + 0.03, endAt - 0.08));
-    gain.gain.exponentialRampToValueAtTime(0.0001, endAt + 0.05);
+    gain.gain.setValueAtTime(MIN_GAIN, startAt);
+    gain.gain.linearRampToValueAtTime(0.16 * velocity, decayStartAt);
+    gain.gain.linearRampToValueAtTime(0.075 * velocity, releaseStartAt);
+    gain.gain.linearRampToValueAtTime(MIN_GAIN, endAt);
 
     oscillator.connect(gain);
     gain.connect(this.getMasterGain(context));
     oscillator.start(startAt);
-    oscillator.stop(endAt + 0.08);
+    oscillator.stop(endAt + 0.03);
 
     this.scheduledVoices.add(voice);
     oscillator.addEventListener("ended", () => {
@@ -469,6 +512,33 @@ export class SynthPlayer implements MidiPlaybackEngine {
     const now = this.audioContext.currentTime;
     holdGainAtCurrentTime(this.masterGain.gain, now, this.masterGain.gain.value);
     this.masterGain.gain.linearRampToValueAtTime(this.masterVolume, now + SEEK_FADE_IN_MS / 1000);
+  }
+
+  private beginTransportTransition(): number {
+    const transitionId = ++this.transportTransitionId;
+    this.activeTransportTransitionId = transitionId;
+    return transitionId;
+  }
+
+  private finishTransportTransition(transitionId: number, applyLatestVolume: boolean): void {
+    if (this.activeTransportTransitionId !== transitionId) {
+      return;
+    }
+
+    this.activeTransportTransitionId = null;
+    if (applyLatestVolume) {
+      this.applyMasterGainTarget();
+    }
+  }
+
+  private prepareMasterGainForStart(): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    holdGainAtCurrentTime(this.masterGain.gain, now, this.masterGain.gain.value);
+    this.masterGain.gain.setValueAtTime(MIN_GAIN, now);
   }
 
   private applyMasterGainTarget(): void {

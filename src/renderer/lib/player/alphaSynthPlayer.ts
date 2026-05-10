@@ -13,14 +13,17 @@ const SOUNDFONT_URL = `${RESOURCE_BASE_URL}/soundfonts/midiSound-2025-1-14.sf2`;
 const ALPHASYNTH_SCRIPT_URL = `${RESOURCE_BASE_URL}/vendor/alphasynth/alphaSynth.min.js`;
 const ALPHASYNTH_SCRIPT_SELECTOR = `script[data-midi-studio-alphasynth="true"]`;
 const ALPHASYNTH_WORKLET_READY_TIMEOUT_MS = 5000;
-const SEEK_FADE_OUT_MS = 20;
-const SEEK_FADE_IN_MS = 40;
-const SEEK_SETTLE_MS = 12;
+const SEEK_FADE_OUT_MS = 80;
+const SEEK_FADE_IN_MS = 100;
+const SEEK_SETTLE_MS = 60;
 const SEEK_MUTED_VOLUME = 0.0001;
+const TRANSPORT_FADE_IN_MS = 50;
+const TRANSPORT_FADE_OUT_MS = 70;
 
 let alphaSynthScriptPromise: Promise<void> | null = null;
 
 type AlphaSynthOutputMode = "audio-worklet" | "script-processor";
+type TransportAction = "play" | "pause" | "stop";
 
 export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private synth: AlphaSynthApi | null = null;
@@ -41,8 +44,11 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private loadId = 0;
   private seekTimerId = 0;
   private seekTransitionId = 0;
+  private transportTransitionId = 0;
   private pendingSeekPositionMs: number | null = null;
   private activeSeekTransitionId: number | null = null;
+  private activeTransportTransitionId: number | null = null;
+  private pendingTransportAction: TransportAction | null = null;
   private lastSeekRequestedAt: number | null = null;
   private seekRequestCount = 0;
   private seekCommitCount = 0;
@@ -112,12 +118,33 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       this.seek(0, { smooth: false, diagnostic: false });
     }
 
+    const previousTransportAction = this.pendingTransportAction;
+    const transitionId = this.beginTransportTransition("play");
+    this.applySynthVolume(SEEK_MUTED_VOLUME);
+    if (previousTransportAction === "stop") {
+      this.synth.setTimePosition(this.snapshot.positionMs);
+    }
     this.synth.play();
+    this.setSnapshot({ status: "playing" });
+    this.fadeTransportVolume(transitionId, this.masterVolume, TRANSPORT_FADE_IN_MS);
+    window.setTimeout(() => {
+      this.finishTransportTransition(transitionId, "play", true);
+    }, TRANSPORT_FADE_IN_MS);
   }
 
   pause(): void {
     this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
-    this.synth?.pause();
+    const synth = this.synth;
+    const transitionId = this.beginTransportTransition("pause");
+    this.fadeTransportVolume(transitionId, SEEK_MUTED_VOLUME, TRANSPORT_FADE_OUT_MS);
+    window.setTimeout(() => {
+      if (!this.isCurrentTransportAction(transitionId, "pause", synth)) {
+        return;
+      }
+
+      synth?.pause();
+      this.finishTransportTransition(transitionId, "pause", false);
+    }, TRANSPORT_FADE_OUT_MS);
     if (this.snapshot.status === "playing") {
       this.setSnapshot({ status: "paused" });
     }
@@ -125,7 +152,17 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
 
   stop(): void {
     this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
-    this.synth?.stop();
+    const synth = this.synth;
+    const transitionId = this.beginTransportTransition("stop");
+    this.fadeTransportVolume(transitionId, SEEK_MUTED_VOLUME, TRANSPORT_FADE_OUT_MS);
+    window.setTimeout(() => {
+      if (!this.isCurrentTransportAction(transitionId, "stop", synth)) {
+        return;
+      }
+
+      synth?.stop();
+      this.finishTransportTransition(transitionId, "stop", false);
+    }, TRANSPORT_FADE_OUT_MS);
     this.setSnapshot({
       status: this.midiReady ? "ready" : "idle",
       positionMs: 0
@@ -174,7 +211,12 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
 
   setMasterVolume(percent: number): void {
     this.masterVolume = clampVolume(percent);
-    if (!this.pendingSeekPositionMs && !this.seekTimerId && this.activeSeekTransitionId === null) {
+    if (
+      !this.pendingSeekPositionMs &&
+      !this.seekTimerId &&
+      this.activeSeekTransitionId === null &&
+      this.activeTransportTransitionId === null
+    ) {
       this.applySynthVolume(this.masterVolume);
     }
   }
@@ -343,6 +385,9 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       if (this.disposed || this.synth !== synth) {
         return;
       }
+      if (this.pendingTransportAction === "stop") {
+        return;
+      }
       this.setSnapshot({
         positionMs: event.currentTime ?? this.snapshot.positionMs,
         durationMs: event.endTime ?? this.snapshot.durationMs
@@ -350,6 +395,12 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     });
     synth.stateChanged.on((event) => {
       if (this.disposed || this.synth !== synth || !this.midiReady) {
+        return;
+      }
+      if (
+        this.pendingTransportAction === "pause" ||
+        this.pendingTransportAction === "stop"
+      ) {
         return;
       }
 
@@ -485,6 +536,73 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     }
   }
 
+  private beginTransportTransition(action: TransportAction): number {
+    const transitionId = ++this.transportTransitionId;
+    this.activeTransportTransitionId = transitionId;
+    this.pendingTransportAction = action;
+    return transitionId;
+  }
+
+  private finishTransportTransition(
+    transitionId: number,
+    action: TransportAction,
+    applyLatestVolume: boolean
+  ): void {
+    if (
+      this.activeTransportTransitionId !== transitionId ||
+      this.pendingTransportAction !== action
+    ) {
+      return;
+    }
+
+    this.activeTransportTransitionId = null;
+    this.pendingTransportAction = null;
+    if (applyLatestVolume) {
+      this.applySynthVolume(this.masterVolume);
+    }
+  }
+
+  private cancelTransportTransition(): void {
+    this.activeTransportTransitionId = null;
+    this.pendingTransportAction = null;
+    this.transportTransitionId += 1;
+  }
+
+  private isCurrentTransportAction(
+    transitionId: number,
+    action: TransportAction,
+    synth: AlphaSynthApi | null
+  ): boolean {
+    return (
+      !this.disposed &&
+      this.synth === synth &&
+      this.activeTransportTransitionId === transitionId &&
+      this.pendingTransportAction === action
+    );
+  }
+
+  private fadeTransportVolume(transitionId: number, targetVolume: number, durationMs: number): void {
+    const synth = this.synth;
+    const steps = Math.max(2, Math.ceil(durationMs / 8));
+    const startVolume = this.appliedMasterVolume;
+
+    for (let step = 1; step <= steps; step += 1) {
+      window.setTimeout(() => {
+        if (
+          this.disposed ||
+          this.synth !== synth ||
+          this.activeTransportTransitionId !== transitionId
+        ) {
+          return;
+        }
+
+        const ratio = step / steps;
+        const volume = startVolume + (targetVolume - startVolume) * ratio;
+        this.applySynthVolume(volume);
+      }, (durationMs * step) / steps);
+    }
+  }
+
   private fadeMasterVolume(targetVolume: number, durationMs: number): void {
     const transitionId = this.seekTransitionId;
     const synth = this.synth;
@@ -588,6 +706,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
 
   private startLoad(): number {
     this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
+    this.cancelTransportTransition();
     if (this.pendingLoad) {
       if (this.pendingLoad.midiStarted) {
         this.destroySynth();
@@ -616,6 +735,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
 
   private destroySynth(): void {
     this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
+    this.cancelTransportTransition();
     this.clearSynthReadyTimeout();
     this.clearSoundFontTimeout();
     try {
