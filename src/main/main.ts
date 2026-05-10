@@ -1,4 +1,4 @@
-import { app, BrowserWindow, shell } from "electron";
+import { app, BrowserWindow, Menu, shell } from "electron";
 import path from "node:path";
 import {
   registerResourceProtocol,
@@ -17,6 +17,7 @@ function createWindow(): void {
     minWidth: 920,
     minHeight: 620,
     title: "midi-studio",
+    autoHideMenuBar: true,
     backgroundColor: "#f5f7fb",
     webPreferences: {
       preload: path.join(__dirname, "../preload/preload.js"),
@@ -39,6 +40,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   registerResourceProtocol();
   registerSettingsHandlers();
   createWindow();
