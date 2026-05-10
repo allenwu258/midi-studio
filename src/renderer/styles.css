@@ -456,7 +456,13 @@ h3 {
 }
 
 .app-shell.transport-locked {
+  height: 100vh;
+  overflow: hidden;
   padding-bottom: calc(var(--transport-lock-offset) + 32px);
+}
+
+.app-shell.transport-locked .workspace {
+  overflow: hidden;
 }
 
 .transport--locked {
@@ -764,6 +770,10 @@ button.button.secondary.transport-icon-button[aria-pressed="true"]:hover:not(:di
 @media (max-width: 860px) {
   .workspace {
     grid-template-columns: 1fr;
+  }
+
+  .app-shell.transport-locked .workspace {
+    grid-template-rows: auto minmax(0, 1fr);
   }
 
   .sidebar {
