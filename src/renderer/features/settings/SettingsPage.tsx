@@ -117,6 +117,27 @@ export function SettingsPage({
         </label>
       </section>
 
+      <section className="settings-section">
+        <div className="settings-copy">
+          <h3>播放诊断</h3>
+          <p>控制播放器侧栏中的诊断指标显示。隐藏后仍会继续采集运行状态。</p>
+        </div>
+        <div className="segmented-control" aria-label="播放诊断显示">
+          <ModeButton
+            active={settings.showPlaybackDiagnostics}
+            disabled={isSaving}
+            label="显示"
+            onClick={() => onUpdate({ showPlaybackDiagnostics: true })}
+          />
+          <ModeButton
+            active={!settings.showPlaybackDiagnostics}
+            disabled={isSaving}
+            label="隐藏"
+            onClick={() => onUpdate({ showPlaybackDiagnostics: false })}
+          />
+        </div>
+      </section>
+
       <section className="settings-section storage-section">
         <div className="settings-copy">
           <h3>数据存储</h3>

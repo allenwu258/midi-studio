@@ -23,7 +23,8 @@ English README: [README.en.md](README.en.md)
   位于播放栏内，默认开启且不写入 SQLite。
 - 设置通过 SQLite 持久化。
   - 播放模式可在 `SF2 合成` / `纯 MIDI` 间切换；
-  - 谱面渲染模式可在 `Engraved SVG` / `Classic JSX` 间切换。
+  - 谱面渲染模式可在 `Engraved SVG` / `Classic JSX` 间切换；
+  - 播放诊断区域可显示或隐藏。
 - MIDI 转五线谱管线：
   - 小节图和拍号边界对齐；
   - 带调号意识的音高拼写；

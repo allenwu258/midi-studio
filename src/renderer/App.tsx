@@ -741,10 +741,12 @@ export function App() {
                   <dd>{formatPlayerStatus(snapshot)}</dd>
                 </div>
               </dl>
-              <PlaybackDiagnosticsPanel
-                playerDiagnostics={playerDiagnostics}
-                runtimeDiagnostics={runtimeDiagnostics}
-              />
+              {settings.showPlaybackDiagnostics ? (
+                <PlaybackDiagnosticsPanel
+                  playerDiagnostics={playerDiagnostics}
+                  runtimeDiagnostics={runtimeDiagnostics}
+                />
+              ) : null}
               {error ? <p className="error-text">{error}</p> : null}
               {settingsError ? <p className="error-text">{settingsError}</p> : null}
             </aside>

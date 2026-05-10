@@ -905,6 +905,7 @@ src/shared/settings.ts
   `Classic JSX`。
 - `defaultSpeedPercent`。
 - `masterVolumePercent`。
+- `showPlaybackDiagnostics`: 是否在播放器侧栏显示播放诊断区域。
 
 重要约束：
 
@@ -913,6 +914,7 @@ src/shared/settings.ts
 - 切换播放器时必须先创建并加载新引擎，再 dispose 旧引擎。
 - 切换谱面渲染模式时应重新请求 score render worker，确保 layout options 与屏幕/导出
   renderer 匹配。
+- 隐藏播放诊断只影响 UI 渲染，不应停止底层 player/runtime diagnostics 采集。
 
 ### 9.1 播放栏锁定状态
 

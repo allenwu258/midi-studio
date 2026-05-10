@@ -26,6 +26,7 @@ Chinese README: [README.md](README.md)
 - Persistent settings backed by SQLite.
   - Playback mode can switch between `SF2 Synth` and `Basic MIDI`.
   - Notation rendering can switch between `Engraved SVG` and `Classic JSX`.
+  - The playback diagnostics panel can be shown or hidden.
 - MIDI-to-staff pipeline:
   - measure map and time signature alignment;
   - pitch spelling with key awareness;
