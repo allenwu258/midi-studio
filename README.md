@@ -19,6 +19,8 @@ English README: [README.en.md](README.en.md)
   ScriptProcessor 并记录诊断。
 - 保留纯 Web Audio 合成器作为备用播放模式。
 - 支持播放、暂停、停止、seek、调速和主音量。
+- 当前进度条 seek 仍是直接驱动播放器定位；拖动时会产生高频 seek，后续需要增加拖动
+  提交/节流、player 层 seek 合并和短淡入淡出，降低 alphaSynth/Web Audio 爆音风险。
 - 底部播放栏默认锁定在窗口底部，也可取消锁定后随页面滚动到末尾；播放跟随按钮也
   位于播放栏内，默认开启且不写入 SQLite。
 - 设置通过 SQLite 持久化。
@@ -48,8 +50,9 @@ English README: [README.en.md](README.en.md)
   - SVG staff system、谱号、小节、音符、休止符、tie、beam、tuplet；
   - time-slice spacing、glyph boxes 和基础 collision avoidance；
   - 播放高亮 overlay 与 React 状态解耦；
-  - 跟随播放滚动以当前 active score event 的 tick 位置定位，横向和纵向分别命中实际
-    可滚动容器，减少多声部/双谱表场景下的跳动。
+  - 跟随播放滚动以当前 active score event 的 tick 位置定位，按 system 做纵向跟随，
+    横向跟随当前 event/measure，并通过视口死区减少不必要的微滚动；
+  - 播放 cursor 作为主要视觉锚点移动，谱面只在跨出舒适阅读区域时滚动。
 - 播放可靠性诊断：
   - 实际输出模式和 fallback reason；
   - alphaSynth 脚本、SF2、MIDI 加载耗时；

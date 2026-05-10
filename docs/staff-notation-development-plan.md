@@ -80,10 +80,11 @@ bottom transport, locked by default
 
 - 当前音符或当前 chord 在五线谱上高亮。
 - 已播放区域有轻量状态。
-- 拖动底部进度条时，五线谱定位同步到对应小节/音符。
+- 拖动底部进度条后，五线谱高亮和播放 cursor 同步到对应小节/音符；当前实现仍直接
+  seek，后续需要把拖动预览与最终提交拆开，避免高频 seek 造成爆音。
 - 点击乐谱上的音符、和弦或小节区域，可以 seek 到对应播放位置。
 - 底部播放栏默认固定在窗口底部，用户可通过图钉按钮取消锁定并恢复为页面底部栏。
-- 跟随播放按钮位于底部播放栏，默认开启；关闭后停止自动滚动但保持播放高亮。
+- 跟随播放按钮位于底部播放栏，默认开启；关闭后停止自动滚动但保持播放高亮和 cursor。
 
 第一版不追求专业排版软件质量，但必须做到：
 
@@ -396,8 +397,27 @@ sourceNoteIds: string[]
 
 ### 进度条 seek 后同步
 
-现有 `seekTo(value)` 保持。
-StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
+当前 `seekTo(value)` 仍直接调用播放器定位：
+
+1. 进度条 `onChange` 输出 positionMs。
+2. `App.seekTo(value)` 调用当前 player 的 `seek(value)`。
+3. StaffNotationPanel 通过轻量 playback clock 读取新位置，刷新 overlay 和 cursor。
+
+当前风险：
+
+- 拖动 range input 时会连续触发多次 seek，alphaSynth `setTimePosition()` 和 Web Audio
+  scheduler reset 都会被高频调用。
+- 音频层还没有统一的 seek 合并、短静音或 gain ramp，快速拖动时容易产生爆音。
+
+后续应改为：
+
+1. 拖动中只更新 UI 预览和时间显示。
+2. pointer/key 提交时执行一次最终 seek，或按固定间隔节流试听 seek。
+3. player 层保底合并短时间内的 seek，只执行最新位置。
+4. 播放中 seek 时做短淡出、定位、淡入，Web Audio fallback 对已排程 voice 做 ramp down
+   后再 stop/disconnect。
+
+StaffNotationPanel 继续只读 playback clock，不直接持有播放器，避免谱面层耦合音频引擎。
 
 ## 简谱移除状态
 
@@ -500,6 +520,9 @@ StaffNotationPanel 只订阅 snapshot.positionMs，不直接持有播放器。
 6. 实现 auto-scroll，由底部播放栏的会话级 follow playback 按钮控制，不写入持久化设置。
 7. 自动滚动按当前 active event 的 `startTicks` 聚合同一谱面时刻的事件，并分别解析横向/
    纵向可滚动容器，避免多声部和双谱表播放时跳动。
+8. 纵向跟随改为按 system 判断舒适区，同一 system 内不因 notehead 高低变化滚动。
+9. 横向跟随保留 active event / measure 目标，但加入死区，减少每个音符级别的微滚动。
+10. 播放 cursor 独立于滚动移动，让用户主要看 cursor，而不是让谱面追逐每个音符。
 
 验收：
 

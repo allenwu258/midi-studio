@@ -875,12 +875,48 @@ renderer mode 选择匹配的 notehead、stem、beam、tie 尺寸。
 - 如果 transport 上的跟随播放处于开启状态，则把当前 active score event 滚动到视口内；
   目标按 `startTicks` 聚合同一谱面时刻的多 voice / 多 staff 事件，横向和纵向分别查找
   实际可滚动祖先容器。
+- 播放 cursor 根据 active event box 绘制，作为阅读时的主要视觉锚点；自动滚动只负责让
+  cursor/system 保持在舒适阅读区域内。
+- 纵向跟随按 system 定位，不直接跟随 notehead 的高低，避免旋律上下跳动导致视口抖动。
+- 横向跟随仍以 active event / measure 为目标，但带视口死区；目标已经可读时不微调
+  scrollLeft。
 - overlay metrics 写入 ref，最多 1s 聚合进入 React diagnostics。
 
 收益：
 
 - 播放时 React 不再跟随 position 高频 rerender。
 - 高亮可以晚一点，但音频路径更安全。
+
+### 8.8 播放时间轴与 Seek
+
+当前 transport 时间轴由底部播放栏的 range input 暴露，`App.seekTo()` 统一调用当前
+player 的 `seek(positionMs)`：
+
+```text
+PlaybackProgressControl.onChange
+  -> App.seekTo(ms)
+  -> Player.seek(ms)
+  -> alphaSynth.setTimePosition(ms) 或 WebAudio scheduler reset
+```
+
+现状限制：
+
+- 进度条拖动过程中的每个 `onChange` 都会立即 seek，快速拖动时会形成 seek 风暴。
+- alphaSynth 路径当前直接调用 `setTimePosition()`，没有 seek 合并、静音过渡或缓冲排空。
+- Web Audio fallback seek 会立即停止 scheduler 并硬切所有 oscillator，波形不在零点时
+  容易产生 click/pop。
+- alphaSynth 当前 buffer time 为 1000ms，稳定播放较安全，但快速 scrub/seek 时可能增加
+  听到旧缓冲或位置突变的概率。
+
+后续修复方向：
+
+- UI 层区分拖动预览与提交：拖动中更新 slider/fill/readout，`pointerup` 或键盘提交时再
+  执行最终 seek；如需要拖动试听，应按 80-120ms 节流。
+- player 层增加 latest-only seek 合并，保证同一帧或短时间内只执行最后一次定位。
+- 播放中 seek 前后做短静音/淡入淡出，避免输出电平瞬时跳变。
+- Web Audio fallback 的 `stopVoices()` 应先 ramp down gain，再延迟 stop/disconnect。
+- alphaSynth buffer time 可以在 250-500ms 范围内试验，并用播放诊断记录 seek burst 与
+  seek interval，避免只凭听感调参。
 
 ## 9. 设置与持久化
 
@@ -1261,6 +1297,10 @@ Player internal clock
 - 音频 clock 不进入 React 高频 state。
 - 静态谱面不因 position 改变重绘。
 - 跟随滚动只在 active id signature 变化时触发，避免播放期间持续写 scroll position。
+- 纵向滚动以 system 为单位判断是否需要移动；同一 system 内只移动 cursor 和高亮，不因
+  音符音高变化上下追逐。
+- 横向滚动以 active event / measure 为单位，但带舒适区判断；cursor 已在视口内时不做
+  每个音符级别的微调。
 - 高亮可以低频或略有延迟，但不能反向影响播放质量。
 
 ## 18. 线程模型与数据边界
