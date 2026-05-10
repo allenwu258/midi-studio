@@ -3,9 +3,9 @@
 midi-studio 是一个本地优先的开源 MIDI 练习桌面应用，基于 React、Electron、
 Vite 和 TypeScript 构建。
 
-当前版本已经从早期简谱原型演进为五线谱主链路：可以打开本地 MIDI，在 Worker
-中解析和生成结构化乐谱，通过 alphaSynth + SF2 或 Web Audio fallback 播放，并在
-五线谱上同步高亮播放位置。
+当前 `v0.2.3` 已经从早期简谱原型演进为五线谱主链路：可以打开本地 MIDI 和
+MusicXML，在 Worker 中解析和生成结构化乐谱，通过 alphaSynth + SF2 或 Web Audio
+fallback 播放，并在五线谱上同步高亮播放位置。
 
 English README: [README.en.md](README.en.md)
 
@@ -19,8 +19,10 @@ English README: [README.en.md](README.en.md)
   ScriptProcessor 并记录诊断。
 - 保留纯 Web Audio 合成器作为备用播放模式。
 - 支持播放、暂停、停止、seek、调速和主音量。
-- 当前进度条 seek 仍是直接驱动播放器定位；拖动时会产生高频 seek，后续需要增加拖动
-  提交/节流、player 层 seek 合并和短淡入淡出，降低 alphaSynth/Web Audio 爆音风险。
+- 进度条拖动采用 UI 预览、释放提交和重复提交抑制；播放器层采用 latest-only seek、
+  短静音/淡入淡出和诊断计数，降低快速拖动、点击音符和调速时的爆音风险。
+- 播放、暂停和停止使用 transport 级短包络；Web Audio fallback 会在重新播放前收口旧
+  release 声部，alphaSynth 路径会串行化 play/pause/stop action 并抑制 stale event 回流。
 - 底部播放栏默认锁定在窗口底部，也可取消锁定后随页面滚动到末尾；播放跟随按钮也
   位于播放栏内，默认开启且不写入 SQLite。
 - 设置通过 SQLite 持久化。
@@ -56,9 +58,22 @@ English README: [README.en.md](README.en.md)
 - 播放可靠性诊断：
   - 实际输出模式和 fallback reason；
   - alphaSynth 脚本、SF2、MIDI 加载耗时；
+  - seek request/commit/drop 计数和最近 seek 过渡耗时；
   - parse/render worker 耗时；
   - 播放期间 long task 观察；
   - overlay 更新指标。
+
+## 发布版本
+
+当前 GitHub tag 线如下：
+
+| 版本 | 主题 | 说明 |
+| --- | --- | --- |
+| `v0.1.0` | 基础 MIDI + SF2 播放器稳定版 | 本地 MIDI、设置持久化、alphaSynth/SF2、基础播放竞态修复。 |
+| `v0.2.0` | 五线谱渲染与量化管线 | Staff notation、量化、布局、worker 渲染、播放诊断。 |
+| `v0.2.1` | MusicXML 导入 | `.xml` / `.musicxml` / `.mxl` 导入和 `ScoreDraft` 直建。 |
+| `v0.2.2` | 雕版渲染与 transport 工具栏 | `Engraved SVG`、渲染模式切换、锁定播放栏。 |
+| `v0.2.3` | 播放跟随与爆音收口 | 播放 cursor、稳定跟随滚动、seek/transport 短包络和状态机收口。 |
 
 ## 环境要求
 
@@ -151,6 +166,10 @@ midi-studio/
   `Classic JSX` 选择对应 layout options。
 - 播放 clock 不驱动 React 高频 rerender；五线谱高亮使用 imperative overlay 和
   聚合诊断。
+- 播放 seek 采用 UI 降频提交、player latest-only 合并和音频层短包络；播放器切换和调速
+  使用内部同步 seek，避免污染用户 seek diagnostics。
+- alphaSynth transport action 使用 generation/action guard，防止延迟 pause/stop 与新
+  play 或 state/position event 互相覆盖。
 - 底部 transport 可锁定为固定工具栏；固定时根据真实 toolbar 高度动态预留底部空间，
   避免遮挡谱面内容。
 - 跟随播放是 transport 上的会话级控制，默认开启，不属于 SQLite 设置；关闭后停止自动
@@ -205,7 +224,7 @@ public/soundfonts/midiSound-2025-1-14.sf2
 - 从 `ScoreDraft` 导出 MusicXML。
 - 增加钢琴键盘可视化。
 - 增加谱面图片/PDF 和离线音频导出。
-- 继续扩展播放和渲染可靠性诊断。
+- 继续扩展播放和渲染可靠性诊断，并补充可复现的 seek/transport 听感回归样例。
 
 ## 许可证
 

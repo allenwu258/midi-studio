@@ -3,9 +3,9 @@
 midi-studio is an open-source local-first desktop MIDI practice studio built
 with React, Electron, Vite, and TypeScript.
 
-The current version can open local MIDI and MusicXML files, parse them in
-workers, play them through either a pure Web Audio fallback or a bundled
-alphaSynth + SF2 engine, and render a structured staff-notation view
+The current `v0.2.3` version can open local MIDI and MusicXML files, parse
+them in workers, play them through either a pure Web Audio fallback or a
+bundled alphaSynth + SF2 engine, and render a structured staff-notation view
 synchronized with playback.
 
 Chinese README: [README.md](README.md)
@@ -20,6 +20,12 @@ Chinese README: [README.md](README.md)
   ScriptProcessor fallback diagnostics.
 - Pure Web Audio synth fallback.
 - Playback controls: play, pause, stop, seek, speed, and master volume.
+- Progress seeking now separates UI preview from committed seek operations,
+  suppresses duplicate release-time commits, and uses latest-only player-level
+  seek coalescing with short output envelopes.
+- Play, pause, and stop use transport-level soft gates. The Web Audio fallback
+  closes old release voices before replay, while alphaSynth serializes
+  play/pause/stop actions and suppresses stale state/position events.
 - The bottom transport bar is locked to the window bottom by default and can be
   unlocked back into the page flow; the follow-playback control also lives in
   the transport, defaults on, and is not persisted to SQLite.
@@ -58,9 +64,22 @@ Chinese README: [README.md](README.md)
 - Playback reliability diagnostics:
   - output mode and fallback reason;
   - alphaSynth load timings;
+  - seek request/commit/drop counts and the latest seek transition time;
   - parse/render worker timings;
   - playback long-task observation;
   - overlay update metrics.
+
+## Releases
+
+The current GitHub tag line is:
+
+| Version | Theme | Notes |
+| --- | --- | --- |
+| `v0.1.0` | Stable MIDI + SF2 playback baseline | Local MIDI, persistent settings, alphaSynth/SF2 playback, and playback loading race fixes. |
+| `v0.2.0` | Staff notation rendering and quantization pipeline | Staff notation, quantization, layout, worker rendering, and playback diagnostics. |
+| `v0.2.1` | MusicXML import | `.xml`, `.musicxml`, and `.mxl` import with direct `ScoreDraft` construction. |
+| `v0.2.2` | Engraved renderer and transport toolbar | `Engraved SVG`, renderer-mode switching, and the lockable transport bar. |
+| `v0.2.3` | Playback follow and pop reduction stability | Playback cursor, stable follow scrolling, seek/transport envelopes, and state-machine cleanup. |
 
 ## Requirements
 
@@ -156,6 +175,12 @@ midi-studio/
   chooses matching layout options for `Engraved SVG` or `Classic JSX`.
 - The playback clock is decoupled from React state; score highlighting uses an
   imperative overlay and throttled diagnostics.
+- Seeking uses throttled UI commits, latest-only player coalescing, and short
+  audio envelopes. Internal player switching and speed changes use synchronous
+  non-diagnostic seeks.
+- alphaSynth transport actions are generation/action guarded so delayed
+  pause/stop callbacks cannot override a newer play action or stale
+  state/position event.
 - The bottom transport can be locked as a fixed toolbar; the renderer reserves
   bottom space from the measured toolbar height to avoid covering notation.
 - Follow playback is a session-local transport control. It defaults on, does
@@ -212,7 +237,8 @@ and updating this documentation.
 - Add MusicXML export from `ScoreDraft`.
 - Add piano keyboard visualization.
 - Add export workflows for score images/PDF and offline audio.
-- Expand reliability diagnostics for playback and rendering.
+- Expand playback/rendering diagnostics and add reproducible seek/transport
+  audio-regression fixtures.
 
 ## License
 

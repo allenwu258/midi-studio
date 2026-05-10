@@ -2,6 +2,9 @@
 
 本文档描述 `midi-studio` 当前功能分支的系统架构、核心数据流、模块边界和关键技术实现。它是 README、五线谱开发计划和 MuseScore 算法调研文档之间的工程总览。
 
+当前发布基线是 `v0.2.3`：该版本完成了 MusicXML 导入、Engraved SVG 渲染、播放 cursor
+与稳定跟随滚动，并对 seek、播放、暂停、停止路径做了爆音收口。
+
 相关文档：
 
 ```text
@@ -33,6 +36,7 @@ docs/alphasynth-sf2-development-plan.md
 - 纯 Web Audio 合成器 fallback。
 - 五线谱 SVG 渲染。
 - 播放位置到乐谱元素的映射。
+- 播放 seek 和 transport 操作的短包络、latest-only 合并和状态机收口。
 - 播放可靠性诊断。
 - SQLite 设置持久化。
 
@@ -105,6 +109,18 @@ Local MusicXML file
 - `PlaybackMap` 是播放时间与乐谱元素之间的索引。
 - 解析和谱面生成运行在 Worker，避免主线程长任务影响播放。
 - 播放 clock 不驱动 React 高频 rerender。
+
+### 2.1 发布版本线
+
+当前 GitHub tag 线：
+
+| 版本 | 主题 | 关键范围 |
+| --- | --- | --- |
+| `v0.1.0` | 基础 MIDI + SF2 播放器稳定版 | MIDI 导入、SQLite 设置、alphaSynth/SF2、基础播放竞态修复。 |
+| `v0.2.0` | 五线谱渲染与量化管线 | ScoreDraft、量化、布局、worker 渲染、播放诊断。 |
+| `v0.2.1` | MusicXML 导入 | MusicXML / `.mxl` 解析、`ScoreDraft` 直建、fixture 校验。 |
+| `v0.2.2` | Engraved 渲染与 transport 工具栏 | `Engraved SVG`、Classic 回退、锁定播放栏。 |
+| `v0.2.3` | 播放跟随与爆音收口 | 播放 cursor、稳定跟随、seek/transport 状态机和短包络。 |
 
 ## 3. 目录与模块边界
 
@@ -412,7 +428,7 @@ interface MidiPlaybackEngine {
   play(): Promise<void> | void;
   pause(): void;
   stop(): void;
-  seek(positionMs: number): void;
+  seek(positionMs: number, options?: PlayerSeekOptions): void;
   setSpeed(percent: number): void;
   setMasterVolume(percent: number): void;
   dispose(): void;
@@ -427,6 +443,19 @@ interface MidiPlaybackEngine {
 
 - `AlphaSynthPlayer`
 - `SynthPlayer`
+
+`PlayerSeekOptions` 当前用于区分用户 seek 与内部定位：
+
+```ts
+type PlayerSeekOptions = {
+  smooth?: boolean;
+  diagnostic?: boolean;
+};
+```
+
+- 用户拖动进度条、点击谱面时使用默认 `smooth: true` / `diagnostic: true`。
+- 播放器切换恢复位置、调速后的内部重定位使用 `smooth: false` / `diagnostic: false`。
+- 这样内部状态维护不会进入 seek 合并队列，也不会污染用户 seek 诊断。
 
 ### 6.2 alphaSynth + SF2 播放
 
@@ -452,6 +481,12 @@ midi-studio-resource://assets/soundfonts/midiSound-2025-1-14.sf2
 - AudioWorklet 初始化或 ready 失败时自动 fallback 到 ScriptProcessor。
 - MIDI bytes 使用 `slice(0)` 保存副本，避免 ArrayBuffer transfer 后 detach。
 - `loadId` 防止旧 load 请求影响新文件。
+- seek 使用 latest-only 合并：同一帧或短时间内只提交最后一次用户定位。
+- 播放中 smooth seek 会先降低 master volume，再 `setTimePosition()`，等待短 settle 后淡入。
+- play/pause/stop 使用 transport action id 串行化；延迟 pause/stop 回调只允许当前 action
+  生效。
+- pending pause/stop 期间会抑制 alphaSynth 的 stale `stateChanged` / `positionChanged`
+  回流，避免 UI 状态在 fade-out 期间跳回 playing 或旧 position。
 - 通过 diagnostics 记录：
   - script load time
   - synth ready time
@@ -460,6 +495,8 @@ midi-studio-resource://assets/soundfonts/midiSound-2025-1-14.sf2
   - output mode
   - fallback reason
   - last error type
+  - seek request / commit / dropped count
+  - latest seek transition time
 
 ### 6.3 纯 Web Audio Fallback
 
@@ -477,7 +514,9 @@ src/renderer/lib/synthPlayer.ts
 注意：
 
 - 当前纯 Web Audio fallback 不是高保真主路径。
-- 如果要把它作为核心播放模式，需要 AudioWorklet 或更强 ahead scheduler。
+- 它已经具备短 attack/release envelope、seek release、transport soft gate 和播放前旧
+  release 声部收口。
+- 如果要把它作为核心高保真播放模式，仍需要 AudioWorklet 或更强 ahead scheduler。
 
 ### 6.4 播放状态与 React 解耦
 
@@ -489,6 +528,8 @@ src/renderer/lib/synthPlayer.ts
 - playing 状态下 position 不再驱动整个 App 高频 rerender。
 - Footer 时间和进度条通过轻量 clock/readout 更新。
 - Staff overlay 通过 `getPlaybackPosition()` 拉取播放器位置。
+- 进度条拖动期间只更新 DOM 预览；释放时提交最终 seek，并抑制紧随其后的同值
+  `onChange` 重复提交。
 
 收益：
 
@@ -893,30 +934,42 @@ renderer mode 选择匹配的 notehead、stem、beam、tie 尺寸。
 player 的 `seek(positionMs)`：
 
 ```text
-PlaybackProgressControl.onChange
+PlaybackProgressControl pointer/change events
+  -> drag preview updates range DOM/fill
+  -> release or non-drag change commits final ms
   -> App.seekTo(ms)
-  -> Player.seek(ms)
-  -> alphaSynth.setTimePosition(ms) 或 WebAudio scheduler reset
+  -> Player.seek(ms, default user diagnostics)
+  -> latest-only player seek
+  -> short output envelope + position commit
 ```
 
-现状限制：
+当前实现：
 
-- 进度条拖动过程中的每个 `onChange` 都会立即 seek，快速拖动时会形成 seek 风暴。
-- alphaSynth 路径当前直接调用 `setTimePosition()`，没有 seek 合并、静音过渡或缓冲排空。
-- Web Audio fallback seek 会立即停止 scheduler 并硬切所有 oscillator，波形不在零点时
-  容易产生 click/pop。
-- alphaSynth 当前 buffer time 为 1000ms，稳定播放较安全，但快速 scrub/seek 时可能增加
-  听到旧缓冲或位置突变的概率。
+- UI 层区分拖动预览与提交：拖动中只更新 input value 和 fill，释放时提交最终值。
+- 紧随释放后的同值 `onChange` 会被抑制，避免重复 seek 造成连续静音窗口。
+- player 层使用 latest-only seek 合并，同一帧或短时间内只执行最后一次定位。
+- 用户 seek 记录 `seekRequestCount`、`seekCommitCount`、`seekDroppedCount`、
+  `lastSeekIntervalMs` 和 `lastSeekTransitionMs`。
+- 播放器切换恢复位置和调速后的内部定位使用同步、非 smooth、无 diagnostics seek。
 
-后续修复方向：
+alphaSynth seek / transport：
 
-- UI 层区分拖动预览与提交：拖动中更新 slider/fill/readout，`pointerup` 或键盘提交时再
-  执行最终 seek；如需要拖动试听，应按 80-120ms 节流。
-- player 层增加 latest-only seek 合并，保证同一帧或短时间内只执行最后一次定位。
-- 播放中 seek 前后做短静音/淡入淡出，避免输出电平瞬时跳变。
-- Web Audio fallback 的 `stopVoices()` 应先 ramp down gain，再延迟 stop/disconnect。
-- alphaSynth buffer time 可以在 250-500ms 范围内试验，并用播放诊断记录 seek burst 与
-  seek interval，避免只凭听感调参。
+- 播放中 smooth seek 先把 master volume 淡到极低值，再调用 `setTimePosition()`，短
+  settle 后淡回最新主音量。
+- active seek 被新的用户 seek、pause 或 stop 取消时会恢复音量并计入 dropped；dispose
+  和 destroy synth 不计入 dropped。
+- play/pause/stop 由 transport action id 管理，延迟 pause/stop 只能在 action id 和 synth
+  实例仍匹配时执行。
+- pending pause/stop fade-out 期间会抑制 stale state/position event，避免 UI 状态回跳。
+
+Web Audio fallback seek / transport：
+
+- 播放中 seek 先降低 master gain，并对 active voices 做短 release。
+- seek fade-in 等待 voice release settle 后再开始，避免把旧位置尾音重新放大。
+- play 会先把 master gain 放到极低值并立即收口旧 releasing voices，再淡入新播放。
+- pause/stop 使用 transport fade-out + voice release；快速再次播放时优先截断旧尾音，
+  避免旧尾音和新起音叠加。
+- 单音 voice envelope 使用短 attack 和较平滑 release，降低每个音符结尾的 click/pop。
 
 ## 9. 设置与持久化
 
@@ -998,6 +1051,11 @@ AlphaSynthPlayer.subscribeDiagnostics()
 - soundFontLoadMs
 - midiLoadMs
 - lastErrorType
+- seekRequestCount
+- seekCommitCount
+- seekDroppedCount
+- lastSeekIntervalMs
+- lastSeekTransitionMs
 
 ### 10.2 Runtime Diagnostics
 
@@ -1035,6 +1093,10 @@ App.tsx
 - alphaSynth AudioWorklet 优先。
 - ScriptProcessor fallback。
 - 播放位置与 React 解耦。
+- 进度条拖动预览/释放提交，避免连续 `onChange` 形成 seek 风暴。
+- player latest-only seek 合并和用户/内部 seek diagnostics 分离。
+- alphaSynth seek/transport 短包络、action guard 和 stale event 抑制。
+- Web Audio fallback voice release、transport soft gate 和播放前旧尾音收口。
 - 静态谱面 memo。
 - overlay signature 去重。
 - 高密度小节 quantization greedy fallback。
@@ -1044,6 +1106,7 @@ App.tsx
 仍需改进：
 
 - 纯 Web Audio fallback 仍是主线程 scheduler。
+- 爆音收口主要依赖短包络和状态机，仍缺少自动化音频波形回归测试。
 - Score worker 内部算法仍可能在极端 MIDI 上耗时较高。
 - Layout/collision 仍是单轮局部解。
 - 缺少正式性能 benchmark suite。
@@ -1159,8 +1222,12 @@ codex/musescore-comparison-fixtures
 下一步：
 
 - 继续收集输出模式、fallback、long task、worker 耗时。
+- 增加可复现的 seek、pause/play、stop/play 音频回归 fixture，用波形峰值和短时能量变化
+  辅助判断 click/pop。
+- 评估是否把 Web Audio fallback 的 scheduler 迁移到 AudioWorklet 或 worker，减少主线程
+  抖动影响。
 - 评估 alphaSynth 是否彻底避开 ScriptProcessor。
-- 如果纯 Web Audio fallback 要成为核心模式，应迁移到 AudioWorklet 或 Worker scheduler。
+- 如果后续听感认为 stop 不够干脆，再单独调短 stop release，而不是回退到硬 stop。
 
 ## 15. 当前风险清单
 
@@ -1169,7 +1236,8 @@ codex/musescore-comparison-fixtures
 - Voice split 最多 2 voice，复杂复调仍可能产生 diagnostics。
 - 自研 SVG 渲染还不是出版级制谱。
 - MusicXML 尚未导出，当前结构化乐谱还没有外部制谱软件闭环验证。
-- 播放主链路已经隔离，但任何重新引入高频 React state 的改动都可能伤害音频可靠性。
+- 播放主链路已经隔离并加入 seek/transport 短包络，但任何重新引入高频 React state 或
+  绕过 player seek 合并的改动都可能伤害音频可靠性。
 
 ## 16. 工程约束
 
