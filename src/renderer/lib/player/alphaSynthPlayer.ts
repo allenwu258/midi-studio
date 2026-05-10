@@ -2,6 +2,7 @@ import type {
   MidiPlaybackEngine,
   PlayerDiagnostics,
   PlayerLoadInput,
+  PlayerSeekOptions,
   PlayerSnapshot,
   PlayerStatus
 } from "./types";
@@ -12,6 +13,10 @@ const SOUNDFONT_URL = `${RESOURCE_BASE_URL}/soundfonts/midiSound-2025-1-14.sf2`;
 const ALPHASYNTH_SCRIPT_URL = `${RESOURCE_BASE_URL}/vendor/alphasynth/alphaSynth.min.js`;
 const ALPHASYNTH_SCRIPT_SELECTOR = `script[data-midi-studio-alphasynth="true"]`;
 const ALPHASYNTH_WORKLET_READY_TIMEOUT_MS = 5000;
+const SEEK_FADE_OUT_MS = 20;
+const SEEK_FADE_IN_MS = 40;
+const SEEK_SETTLE_MS = 12;
+const SEEK_MUTED_VOLUME = 0.0001;
 
 let alphaSynthScriptPromise: Promise<void> | null = null;
 
@@ -32,7 +37,16 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   private disposed = false;
   private speed = 1;
   private masterVolume = 1;
+  private appliedMasterVolume = 1;
   private loadId = 0;
+  private seekTimerId = 0;
+  private seekTransitionId = 0;
+  private pendingSeekPositionMs: number | null = null;
+  private activeSeekTransitionId: number | null = null;
+  private lastSeekRequestedAt: number | null = null;
+  private seekRequestCount = 0;
+  private seekCommitCount = 0;
+  private seekDroppedCount = 0;
   private snapshot: PlayerSnapshot = {
     status: "idle",
     positionMs: 0,
@@ -78,6 +92,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
       return Promise.reject(this.soundFontError);
     }
 
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: false });
     this.synth.stop();
     this.midiBytes = input.midiBytes.slice(0);
     this.midiReady = false;
@@ -94,13 +109,14 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     }
 
     if (this.snapshot.positionMs >= this.snapshot.durationMs) {
-      this.seek(0);
+      this.seek(0, { smooth: false, diagnostic: false });
     }
 
     this.synth.play();
   }
 
   pause(): void {
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
     this.synth?.pause();
     if (this.snapshot.status === "playing") {
       this.setSnapshot({ status: "paused" });
@@ -108,6 +124,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   }
 
   stop(): void {
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
     this.synth?.stop();
     this.setSnapshot({
       status: this.midiReady ? "ready" : "idle",
@@ -115,10 +132,39 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     });
   }
 
-  seek(positionMs: number): void {
+  seek(positionMs: number, options: PlayerSeekOptions = {}): void {
     const nextPosition = Math.max(0, Math.min(positionMs, this.snapshot.durationMs));
-    this.synth?.setTimePosition(nextPosition);
-    this.setSnapshot({ positionMs: nextPosition });
+    const shouldRecordDiagnostics = options.diagnostic !== false;
+    if (shouldRecordDiagnostics) {
+      this.recordSeekRequest();
+    }
+
+    if (options.smooth === false) {
+      this.cancelSeekTransition({ restoreVolume: false, countDropped: shouldRecordDiagnostics });
+      this.commitSeek(nextPosition, false, shouldRecordDiagnostics);
+      return;
+    }
+
+    if (this.activeSeekTransitionId !== null) {
+      this.cancelSeekTransition({ restoreVolume: false, countDropped: shouldRecordDiagnostics });
+    }
+
+    this.pendingSeekPositionMs = nextPosition;
+    if (this.seekTimerId) {
+      if (shouldRecordDiagnostics) {
+        this.recordSeekDropped();
+      }
+      return;
+    }
+
+    this.seekTimerId = window.setTimeout(() => {
+      this.seekTimerId = 0;
+      const pendingPosition = this.pendingSeekPositionMs;
+      this.pendingSeekPositionMs = null;
+      if (pendingPosition !== null) {
+        this.commitSeek(pendingPosition, true, shouldRecordDiagnostics);
+      }
+    }, 0);
   }
 
   setSpeed(percent: number): void {
@@ -128,12 +174,15 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
 
   setMasterVolume(percent: number): void {
     this.masterVolume = clampVolume(percent);
-    this.synth?.setMasterVolume(this.masterVolume);
+    if (!this.pendingSeekPositionMs && !this.seekTimerId && this.activeSeekTransitionId === null) {
+      this.applySynthVolume(this.masterVolume);
+    }
   }
 
   dispose(): void {
     this.disposed = true;
     this.loadId += 1;
+    this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
     this.destroySynth();
     this.pendingLoad?.reject(new Error("播放器已释放。"));
     this.pendingLoad = null;
@@ -242,7 +291,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
         synthReadyMs: elapsedSince(this.synthReadyStartedAt),
         outputMode: outputMode === "audio-worklet" ? "audio-worklet" : "script-processor"
       });
-      synth.setMasterVolume(this.masterVolume);
+      this.applySynthVolume(this.masterVolume);
       this.startSoundFontTimeout();
     });
     synth.soundFontLoaded.on(() => {
@@ -344,6 +393,123 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     this.synth.loadMidiFile(this.midiBytes);
   }
 
+  private commitSeek(positionMs: number, smooth: boolean, diagnostic: boolean): void {
+    const synth = this.synth;
+    const wasPlaying = this.snapshot.status === "playing";
+    const transitionId = ++this.seekTransitionId;
+    const startedAt = performance.now();
+
+    if (!synth) {
+      this.setSnapshot({ positionMs });
+      if (diagnostic) {
+        this.recordSeekCommit(performance.now() - startedAt);
+      }
+      return;
+    }
+
+    if (!smooth || !wasPlaying) {
+      synth.setTimePosition(positionMs);
+      this.setSnapshot({ positionMs });
+      if (diagnostic) {
+        this.recordSeekCommit(performance.now() - startedAt);
+      }
+      return;
+    }
+
+    this.activeSeekTransitionId = transitionId;
+    this.fadeMasterVolume(SEEK_MUTED_VOLUME, SEEK_FADE_OUT_MS);
+    window.setTimeout(() => {
+      if (this.disposed || this.synth !== synth || transitionId !== this.seekTransitionId) {
+        return;
+      }
+
+      if (this.snapshot.status !== "playing") {
+        this.abortActiveSeekTransition(transitionId, {
+          restoreVolume: true,
+          countDropped: diagnostic
+        });
+        return;
+      }
+
+      synth.setTimePosition(positionMs);
+      this.setSnapshot({ positionMs });
+
+      window.setTimeout(() => {
+        if (this.disposed || this.synth !== synth || transitionId !== this.seekTransitionId) {
+          return;
+        }
+
+        if (this.snapshot.status !== "playing") {
+          this.abortActiveSeekTransition(transitionId, {
+            restoreVolume: true,
+            countDropped: diagnostic
+          });
+          return;
+        }
+
+        this.fadeMasterVolume(this.masterVolume, SEEK_FADE_IN_MS);
+        window.setTimeout(() => {
+          if (this.activeSeekTransitionId === transitionId) {
+            this.activeSeekTransitionId = null;
+            this.applySynthVolume(this.masterVolume);
+            if (diagnostic) {
+              this.recordSeekCommit(performance.now() - startedAt);
+            }
+          }
+        }, SEEK_FADE_IN_MS);
+      }, SEEK_SETTLE_MS);
+    }, SEEK_FADE_OUT_MS);
+  }
+
+  private abortActiveSeekTransition(
+    transitionId: number,
+    {
+      restoreVolume,
+      countDropped
+    }: {
+      restoreVolume: boolean;
+      countDropped: boolean;
+    }
+  ): void {
+    if (this.activeSeekTransitionId !== transitionId) {
+      return;
+    }
+
+    this.activeSeekTransitionId = null;
+    this.seekTransitionId += 1;
+    if (countDropped) {
+      this.recordSeekDropped();
+    }
+    if (restoreVolume) {
+      this.applySynthVolume(this.masterVolume);
+    }
+  }
+
+  private fadeMasterVolume(targetVolume: number, durationMs: number): void {
+    const transitionId = this.seekTransitionId;
+    const synth = this.synth;
+    const steps = Math.max(2, Math.ceil(durationMs / 8));
+    const startVolume = this.appliedMasterVolume;
+
+    for (let step = 1; step <= steps; step += 1) {
+      window.setTimeout(() => {
+        if (this.disposed || this.synth !== synth || transitionId !== this.seekTransitionId) {
+          return;
+        }
+
+        const ratio = step / steps;
+        const volume = startVolume + (targetVolume - startVolume) * ratio;
+        this.applySynthVolume(volume);
+      }, (durationMs * step) / steps);
+    }
+  }
+
+  private applySynthVolume(volume: number): void {
+    const nextVolume = Math.max(0, Math.min(volume, 1));
+    this.appliedMasterVolume = nextVolume;
+    this.synth?.setMasterVolume(nextVolume);
+  }
+
   private startSoundFontTimeout(): void {
     this.clearSoundFontTimeout();
     this.soundFontTimeoutId = window.setTimeout(() => {
@@ -421,6 +587,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   }
 
   private startLoad(): number {
+    this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
     if (this.pendingLoad) {
       if (this.pendingLoad.midiStarted) {
         this.destroySynth();
@@ -448,6 +615,7 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
   }
 
   private destroySynth(): void {
+    this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
     this.clearSynthReadyTimeout();
     this.clearSoundFontTimeout();
     try {
@@ -495,6 +663,56 @@ export class AlphaSynthPlayer implements MidiPlaybackEngine {
     for (const listener of this.diagnosticsListeners) {
       listener(this.diagnostics);
     }
+  }
+
+  private cancelSeekTransition({
+    restoreVolume,
+    countDropped
+  }: {
+    restoreVolume: boolean;
+    countDropped: boolean;
+  }): void {
+    const hadPendingOrActive = this.seekTimerId !== 0 || this.activeSeekTransitionId !== null;
+    if (this.seekTimerId) {
+      window.clearTimeout(this.seekTimerId);
+      this.seekTimerId = 0;
+    }
+    this.pendingSeekPositionMs = null;
+    this.activeSeekTransitionId = null;
+    this.seekTransitionId += 1;
+    if (countDropped && hadPendingOrActive) {
+      this.recordSeekDropped();
+    }
+    if (restoreVolume) {
+      this.applySynthVolume(this.masterVolume);
+    }
+  }
+
+  private recordSeekRequest(): void {
+    const now = performance.now();
+    const previousRequestAt = this.lastSeekRequestedAt;
+    this.lastSeekRequestedAt = now;
+    this.seekRequestCount += 1;
+    this.patchDiagnostics({
+      seekRequestCount: this.seekRequestCount,
+      lastSeekIntervalMs: previousRequestAt === null ? undefined : now - previousRequestAt
+    });
+  }
+
+  private recordSeekDropped(): void {
+    this.seekDroppedCount += 1;
+    this.patchDiagnostics({
+      seekDroppedCount: this.seekDroppedCount
+    });
+  }
+
+  private recordSeekCommit(transitionMs: number): void {
+    this.seekCommitCount += 1;
+    this.patchDiagnostics({
+      seekCommitCount: this.seekCommitCount,
+      seekDroppedCount: this.seekDroppedCount,
+      lastSeekTransitionMs: transitionMs
+    });
   }
 }
 

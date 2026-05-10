@@ -29,6 +29,11 @@ export type PlayerDiagnostics = {
   synthReadyMs?: number;
   soundFontLoadMs?: number;
   midiLoadMs?: number;
+  seekRequestCount?: number;
+  seekCommitCount?: number;
+  seekDroppedCount?: number;
+  lastSeekIntervalMs?: number;
+  lastSeekTransitionMs?: number;
   lastErrorType?: string;
 };
 
@@ -38,12 +43,17 @@ export type PlayerLoadInput = {
   durationMs: number;
 };
 
+export type PlayerSeekOptions = {
+  diagnostic?: boolean;
+  smooth?: boolean;
+};
+
 export interface MidiPlaybackEngine {
   load(input: PlayerLoadInput): Promise<void> | void;
   play(): Promise<void>;
   pause(): void;
   stop(): void;
-  seek(positionMs: number): void;
+  seek(positionMs: number, options?: PlayerSeekOptions): void;
   setSpeed(percent: number): void;
   setMasterVolume(percent: number): void;
   dispose(): void;

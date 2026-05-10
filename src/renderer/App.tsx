@@ -611,7 +611,7 @@ export function App() {
       return;
     }
 
-    nextPlayer.seek(resumePositionMs);
+    nextPlayer.seek(resumePositionMs, { smooth: false, diagnostic: false });
     if (wasPlaying) {
       await nextPlayer.play();
     }
@@ -905,6 +905,21 @@ function PlaybackDiagnosticsPanel({
           </dd>
         </div>
         <div>
+          <dt>Seek</dt>
+          <dd>
+            {playerDiagnostics.seekRequestCount ?? 0} / {playerDiagnostics.seekCommitCount ?? 0} /{" "}
+            {playerDiagnostics.seekDroppedCount ?? 0}
+          </dd>
+        </div>
+        <div>
+          <dt>Seek 间隔</dt>
+          <dd>{formatDuration(playerDiagnostics.lastSeekIntervalMs)}</dd>
+        </div>
+        <div>
+          <dt>Seek 过渡</dt>
+          <dd>{formatDuration(playerDiagnostics.lastSeekTransitionMs)}</dd>
+        </div>
+        <div>
           <dt>错误</dt>
           <dd>
             {playerDiagnostics.lastErrorType ??
@@ -1029,18 +1044,35 @@ function PlaybackProgressControl({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const fillRef = useRef<HTMLDivElement | null>(null);
+  const isDraggingRef = useRef(false);
+  const pendingSeekRef = useRef<number | null>(null);
+  const lastCommittedSeekRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    function updateProgress() {
-      const positionMs = getPlaybackPosition();
+  const updateProgressDisplay = useCallback(
+    (positionMs: number) => {
       const progressPercent = durationMs ? Math.min(100, (positionMs / durationMs) * 100) : 0;
 
-      if (inputRef.current && document.activeElement !== inputRef.current) {
+      if (inputRef.current) {
         inputRef.current.value = String(Math.round(positionMs));
       }
 
       if (fillRef.current) {
         fillRef.current.style.width = `${progressPercent}%`;
+      }
+    },
+    [durationMs]
+  );
+
+  useEffect(() => {
+    function updateProgress() {
+      if (isDraggingRef.current) {
+        return;
+      }
+
+      const positionMs = getPlaybackPosition();
+
+      if (document.activeElement !== inputRef.current) {
+        updateProgressDisplay(positionMs);
       }
     }
 
@@ -1048,7 +1080,52 @@ function PlaybackProgressControl({
     const intervalId = window.setInterval(updateProgress, PLAYBACK_SNAPSHOT_INTERVAL_MS);
 
     return () => window.clearInterval(intervalId);
-  }, [durationMs, getPlaybackPosition, status]);
+  }, [durationMs, getPlaybackPosition, status, updateProgressDisplay]);
+
+  useEffect(() => {
+    if (!disabled) {
+      return undefined;
+    }
+
+    isDraggingRef.current = false;
+    pendingSeekRef.current = null;
+    lastCommittedSeekRef.current = null;
+    updateProgressDisplay(getPlaybackPosition());
+    return undefined;
+  }, [disabled, getPlaybackPosition, updateProgressDisplay]);
+
+  function beginDrag() {
+    if (disabled) {
+      return;
+    }
+
+    isDraggingRef.current = true;
+    lastCommittedSeekRef.current = null;
+  }
+
+  function updateDrag(value: number) {
+    const nextPosition = Math.max(0, Math.min(value, durationMs || 0));
+    pendingSeekRef.current = nextPosition;
+    updateProgressDisplay(nextPosition);
+  }
+
+  function finishDrag() {
+    if (!isDraggingRef.current) {
+      return;
+    }
+
+    isDraggingRef.current = false;
+    const finalPosition = Number(inputRef.current?.value ?? pendingSeekRef.current);
+    pendingSeekRef.current = null;
+
+    if (!Number.isFinite(finalPosition)) {
+      return;
+    }
+
+    const nextPosition = Math.max(0, Math.min(finalPosition, durationMs || 0));
+    lastCommittedSeekRef.current = nextPosition;
+    onSeek(nextPosition);
+  }
 
   return (
     <div className="progress-wrap">
@@ -1061,7 +1138,38 @@ function PlaybackProgressControl({
         step="1"
         defaultValue={Math.round(getPlaybackPosition())}
         disabled={disabled}
-        onChange={(event) => onSeek(Number(event.currentTarget.value))}
+        onPointerDown={(event) => {
+          beginDrag();
+          if (!disabled) {
+            event.currentTarget.setPointerCapture(event.pointerId);
+          }
+        }}
+        onPointerUp={finishDrag}
+        onPointerCancel={finishDrag}
+        onMouseDown={beginDrag}
+        onMouseUp={finishDrag}
+        onTouchStart={beginDrag}
+        onTouchEnd={finishDrag}
+        onBlur={finishDrag}
+        onChange={(event) => {
+          const nextValue = Number(event.currentTarget.value);
+          if (isDraggingRef.current) {
+            updateDrag(nextValue);
+            return;
+          }
+
+          updateProgressDisplay(nextValue);
+          if (
+            lastCommittedSeekRef.current !== null &&
+            Math.round(nextValue) === Math.round(lastCommittedSeekRef.current)
+          ) {
+            lastCommittedSeekRef.current = null;
+            return;
+          }
+
+          lastCommittedSeekRef.current = null;
+          onSeek(nextValue);
+        }}
         aria-label="播放进度"
       />
       <div ref={fillRef} className="progress-fill" />

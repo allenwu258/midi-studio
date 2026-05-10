@@ -3,6 +3,7 @@ import type {
   MidiPlaybackEngine,
   PlayerDiagnostics,
   PlayerLoadInput,
+  PlayerSeekOptions,
   PlayerSnapshot,
   PlayerStatus
 } from "./player/types";
@@ -10,7 +11,14 @@ import type {
 type ScheduledVoice = {
   oscillator: OscillatorNode;
   gain: GainNode;
+  startAt: number;
+  disconnected: boolean;
 };
+
+const SEEK_FADE_OUT_MS = 18;
+const SEEK_FADE_IN_MS = 36;
+const VOICE_RELEASE_MS = 35;
+const MIN_GAIN = 0.0001;
 
 export class SynthPlayer implements MidiPlaybackEngine {
   private audioContext: AudioContext | null = null;
@@ -25,17 +33,27 @@ export class SynthPlayer implements MidiPlaybackEngine {
   private playStartedPosition = 0;
   private nextNoteIndex = 0;
   private schedulerId = 0;
+  private seekTimerId = 0;
+  private seekTransitionId = 0;
+  private pendingSeekPositionMs: number | null = null;
+  private activeSeekTransitionId: number | null = null;
+  private lastSeekRequestedAt: number | null = null;
   private scheduledVoices = new Set<ScheduledVoice>();
+  private releasingVoices = new Set<ScheduledVoice>();
   private listeners = new Set<(snapshot: PlayerSnapshot) => void>();
   private diagnosticsListeners = new Set<(diagnostics: PlayerDiagnostics) => void>();
   private diagnostics: PlayerDiagnostics = {
     engine: "basic-midi",
     outputMode: "pure-web-audio"
   };
+  private seekRequestCount = 0;
+  private seekCommitCount = 0;
+  private seekDroppedCount = 0;
 
   load(input: PlayerLoadInput): void {
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: false });
     this.stopScheduler();
-    this.stopVoices();
+    this.stopVoicesImmediately();
     this.notes = input.notes;
     this.durationMs = input.durationMs;
     this.positionMs = 0;
@@ -72,38 +90,57 @@ export class SynthPlayer implements MidiPlaybackEngine {
       return;
     }
 
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
     this.positionMs = this.getPositionMs();
     this.status = "paused";
     this.stopScheduler();
-    this.stopVoices();
+    this.releaseVoices(VOICE_RELEASE_MS);
     this.emit();
   }
 
   stop(): void {
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: true });
     this.stopScheduler();
-    this.stopVoices();
+    this.releaseVoices(VOICE_RELEASE_MS);
     this.positionMs = 0;
     this.status = "idle";
     this.nextNoteIndex = 0;
     this.emit();
   }
 
-  seek(positionMs: number): void {
+  seek(positionMs: number, options: PlayerSeekOptions = {}): void {
     const nextPosition = Math.max(0, Math.min(positionMs, this.durationMs));
-    const wasPlaying = this.status === "playing";
-
-    this.stopScheduler();
-    this.stopVoices();
-    this.positionMs = nextPosition;
-    this.nextNoteIndex = this.findNextNoteIndex(nextPosition);
-
-    if (wasPlaying && this.audioContext) {
-      this.playStartedAt = this.audioContext.currentTime;
-      this.playStartedPosition = this.positionMs;
-      this.startScheduler();
+    const shouldRecordDiagnostics = options.diagnostic !== false;
+    if (shouldRecordDiagnostics) {
+      this.recordSeekRequest();
     }
 
-    this.emit();
+    if (options.smooth === false) {
+      this.cancelSeekTransition({ restoreVolume: false, countDropped: shouldRecordDiagnostics });
+      this.commitSeek(nextPosition, false, shouldRecordDiagnostics);
+      return;
+    }
+
+    if (this.activeSeekTransitionId !== null) {
+      this.cancelSeekTransition({ restoreVolume: false, countDropped: shouldRecordDiagnostics });
+    }
+
+    this.pendingSeekPositionMs = nextPosition;
+    if (this.seekTimerId) {
+      if (shouldRecordDiagnostics) {
+        this.recordSeekDropped();
+      }
+      return;
+    }
+
+    this.seekTimerId = window.setTimeout(() => {
+      this.seekTimerId = 0;
+      const pendingPosition = this.pendingSeekPositionMs;
+      this.pendingSeekPositionMs = null;
+      if (pendingPosition !== null) {
+        this.commitSeek(pendingPosition, true, shouldRecordDiagnostics);
+      }
+    }, 0);
   }
 
   setSpeed(percent: number): void {
@@ -111,16 +148,21 @@ export class SynthPlayer implements MidiPlaybackEngine {
     const currentPosition = this.getPositionMs();
 
     this.speed = nextSpeed;
-    this.seek(currentPosition);
+    this.cancelSeekTransition({ restoreVolume: true, countDropped: false });
+    this.repositionAfterSpeedChange(currentPosition);
   }
 
   setMasterVolume(percent: number): void {
     this.masterVolume = clampVolume(percent);
-    this.masterGain?.gain.setTargetAtTime(
-      this.masterVolume,
-      this.audioContext?.currentTime ?? 0,
-      0.01
-    );
+    if (
+      this.pendingSeekPositionMs !== null ||
+      this.seekTimerId ||
+      this.activeSeekTransitionId !== null
+    ) {
+      return;
+    }
+
+    this.applyMasterGainTarget();
   }
 
   getSnapshot(): PlayerSnapshot {
@@ -153,7 +195,11 @@ export class SynthPlayer implements MidiPlaybackEngine {
   }
 
   dispose(): void {
-    this.stop();
+    this.cancelSeekTransition({ restoreVolume: false, countDropped: false });
+    this.stopScheduler();
+    this.stopVoicesImmediately();
+    this.positionMs = 0;
+    this.status = "idle";
     this.listeners.clear();
     this.diagnosticsListeners.clear();
     void this.audioContext?.close();
@@ -199,6 +245,98 @@ export class SynthPlayer implements MidiPlaybackEngine {
     }
   }
 
+  private commitSeek(positionMs: number, smooth: boolean, diagnostic: boolean): void {
+    const wasPlaying = this.status === "playing";
+    const context = this.audioContext;
+    const transitionId = ++this.seekTransitionId;
+    const startedAt = performance.now();
+
+    this.stopScheduler();
+
+    if (smooth && wasPlaying && context) {
+      this.activeSeekTransitionId = transitionId;
+      this.rampMasterGainTo(MIN_GAIN, SEEK_FADE_OUT_MS);
+      this.releaseVoices(VOICE_RELEASE_MS);
+
+      window.setTimeout(() => {
+        if (transitionId !== this.seekTransitionId) {
+          return;
+        }
+
+        if (this.status !== "playing") {
+          this.abortActiveSeekTransition(transitionId, {
+            restoreVolume: true,
+            countDropped: diagnostic
+          });
+          return;
+        }
+
+        this.applySeekPosition(positionMs, wasPlaying);
+        this.rampMasterGainTo(this.masterVolume, SEEK_FADE_IN_MS);
+        window.setTimeout(() => {
+          if (this.activeSeekTransitionId === transitionId) {
+            this.activeSeekTransitionId = null;
+            this.applyMasterGainTarget();
+            if (diagnostic) {
+              this.recordSeekCommit(performance.now() - startedAt);
+            }
+          }
+        }, SEEK_FADE_IN_MS);
+      }, SEEK_FADE_OUT_MS);
+      return;
+    }
+
+    this.stopVoicesImmediately();
+    this.applySeekPosition(positionMs, wasPlaying);
+    if (diagnostic) {
+      this.recordSeekCommit(performance.now() - startedAt);
+    }
+  }
+
+  private abortActiveSeekTransition(
+    transitionId: number,
+    {
+      restoreVolume,
+      countDropped
+    }: {
+      restoreVolume: boolean;
+      countDropped: boolean;
+    }
+  ): void {
+    if (this.activeSeekTransitionId !== transitionId) {
+      return;
+    }
+
+    this.activeSeekTransitionId = null;
+    this.seekTransitionId += 1;
+    if (countDropped) {
+      this.recordSeekDropped();
+    }
+    if (restoreVolume) {
+      this.restoreMasterGain();
+    }
+  }
+
+  private repositionAfterSpeedChange(positionMs: number): void {
+    const wasPlaying = this.status === "playing";
+    this.stopScheduler();
+    this.releaseVoices(VOICE_RELEASE_MS);
+    this.applySeekPosition(positionMs, wasPlaying);
+  }
+
+  private applySeekPosition(positionMs: number, resumePlayback: boolean): void {
+    this.positionMs = positionMs;
+    this.nextNoteIndex = this.findNextNoteIndex(positionMs);
+
+    if (resumePlayback && this.audioContext) {
+      this.playStartedAt = this.audioContext.currentTime;
+      this.playStartedPosition = this.positionMs;
+      this.startScheduler();
+    }
+
+    this.emit();
+  }
+
   private scheduleAhead(): void {
     if (this.status !== "playing") {
       return;
@@ -233,7 +371,7 @@ export class SynthPlayer implements MidiPlaybackEngine {
     const endAt = startAt + durationSeconds;
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    const voice = { oscillator, gain };
+    const voice = { oscillator, gain, startAt, disconnected: false };
     const velocity = Math.max(0.08, Math.min(note.velocity || 0.6, 1));
 
     oscillator.type = "triangle";
@@ -251,22 +389,94 @@ export class SynthPlayer implements MidiPlaybackEngine {
     this.scheduledVoices.add(voice);
     oscillator.addEventListener("ended", () => {
       this.scheduledVoices.delete(voice);
-      oscillator.disconnect();
-      gain.disconnect();
+      this.releasingVoices.delete(voice);
+      this.disconnectVoice(voice);
     });
   }
 
-  private stopVoices(): void {
-    for (const voice of this.scheduledVoices) {
-      try {
-        voice.oscillator.stop();
-      } catch {
-        // The voice may already be stopped; either state is fine here.
+  private releaseVoices(releaseMs: number): void {
+    if (!this.audioContext) {
+      this.stopVoicesImmediately();
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    const releaseSeconds = Math.max(0.005, releaseMs / 1000);
+
+    for (const voice of [...this.scheduledVoices]) {
+      this.scheduledVoices.delete(voice);
+      if (voice.startAt > now) {
+        this.stopVoiceImmediately(voice);
+        continue;
       }
-      voice.oscillator.disconnect();
-      voice.gain.disconnect();
+
+      this.releasingVoices.add(voice);
+      try {
+        const currentGain = Math.max(MIN_GAIN, voice.gain.gain.value || MIN_GAIN);
+        holdGainAtCurrentTime(voice.gain.gain, now, currentGain);
+        voice.gain.gain.linearRampToValueAtTime(MIN_GAIN, now + releaseSeconds);
+        voice.oscillator.stop(now + releaseSeconds + 0.02);
+      } catch {
+        this.stopVoiceImmediately(voice);
+      }
+    }
+  }
+
+  private stopVoicesImmediately(): void {
+    for (const voice of [...this.scheduledVoices, ...this.releasingVoices]) {
+      this.stopVoiceImmediately(voice);
     }
     this.scheduledVoices.clear();
+    this.releasingVoices.clear();
+  }
+
+  private stopVoiceImmediately(voice: ScheduledVoice): void {
+    try {
+      voice.oscillator.stop();
+    } catch {
+      // The voice may already be stopped; either state is fine here.
+    }
+    this.disconnectVoice(voice);
+    this.scheduledVoices.delete(voice);
+    this.releasingVoices.delete(voice);
+  }
+
+  private disconnectVoice(voice: ScheduledVoice): void {
+    if (voice.disconnected) {
+      return;
+    }
+
+    voice.disconnected = true;
+    voice.oscillator.disconnect();
+    voice.gain.disconnect();
+  }
+
+  private rampMasterGainTo(targetGain: number, durationMs: number): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    holdGainAtCurrentTime(this.masterGain.gain, now, this.masterGain.gain.value);
+    this.masterGain.gain.linearRampToValueAtTime(Math.max(0, targetGain), now + durationMs / 1000);
+  }
+
+  private restoreMasterGain(): void {
+    if (!this.audioContext || !this.masterGain) {
+      return;
+    }
+
+    const now = this.audioContext.currentTime;
+    holdGainAtCurrentTime(this.masterGain.gain, now, this.masterGain.gain.value);
+    this.masterGain.gain.linearRampToValueAtTime(this.masterVolume, now + SEEK_FADE_IN_MS / 1000);
+  }
+
+  private applyMasterGainTarget(): void {
+    this.masterGain?.gain.setTargetAtTime(
+      this.masterVolume,
+      this.audioContext?.currentTime ?? 0,
+      0.01
+    );
   }
 
   private getMasterGain(context: AudioContext): GainNode {
@@ -295,7 +505,7 @@ export class SynthPlayer implements MidiPlaybackEngine {
     }
 
     this.stopScheduler();
-    this.stopVoices();
+    this.releaseVoices(VOICE_RELEASE_MS);
     this.positionMs = this.durationMs;
     this.status = "ended";
     this.emit();
@@ -307,6 +517,70 @@ export class SynthPlayer implements MidiPlaybackEngine {
       listener(snapshot);
     }
   }
+
+  private cancelSeekTransition({
+    restoreVolume,
+    countDropped
+  }: {
+    restoreVolume: boolean;
+    countDropped: boolean;
+  }): void {
+    const hadPendingOrActive = this.seekTimerId !== 0 || this.activeSeekTransitionId !== null;
+    if (this.seekTimerId) {
+      window.clearTimeout(this.seekTimerId);
+      this.seekTimerId = 0;
+    }
+    this.pendingSeekPositionMs = null;
+    this.activeSeekTransitionId = null;
+    this.seekTransitionId += 1;
+    if (countDropped && hadPendingOrActive) {
+      this.recordSeekDropped();
+    }
+    if (restoreVolume) {
+      this.restoreMasterGain();
+    }
+  }
+
+  private recordSeekRequest(): void {
+    const now = performance.now();
+    const previousRequestAt = this.lastSeekRequestedAt;
+    this.lastSeekRequestedAt = now;
+    this.seekRequestCount += 1;
+    this.patchDiagnostics({
+      seekRequestCount: this.seekRequestCount,
+      lastSeekIntervalMs: previousRequestAt === null ? undefined : now - previousRequestAt
+    });
+  }
+
+  private recordSeekDropped(): void {
+    this.seekDroppedCount += 1;
+    this.patchDiagnostics({
+      seekDroppedCount: this.seekDroppedCount
+    });
+  }
+
+  private recordSeekCommit(transitionMs: number): void {
+    this.seekCommitCount += 1;
+    this.patchDiagnostics({
+      seekCommitCount: this.seekCommitCount,
+      seekDroppedCount: this.seekDroppedCount,
+      lastSeekTransitionMs: transitionMs
+    });
+  }
+
+  private patchDiagnostics(patch: Partial<PlayerDiagnostics>): void {
+    this.diagnostics = {
+      ...this.diagnostics,
+      ...patch
+    };
+    this.emitDiagnostics();
+  }
+
+  private emitDiagnostics(): void {
+    for (const listener of this.diagnosticsListeners) {
+      listener(this.diagnostics);
+    }
+  }
 }
 
 function midiToFrequency(midi: number): number {
@@ -315,4 +589,14 @@ function midiToFrequency(midi: number): number {
 
 function clampVolume(percent: number): number {
   return Math.max(0, Math.min(percent / 100, 1));
+}
+
+function holdGainAtCurrentTime(param: AudioParam, now: number, fallbackValue: number): void {
+  if ("cancelAndHoldAtTime" in param && typeof param.cancelAndHoldAtTime === "function") {
+    param.cancelAndHoldAtTime(now);
+    return;
+  }
+
+  param.cancelScheduledValues(now);
+  param.setValueAtTime(Math.max(0, fallbackValue), now);
 }
